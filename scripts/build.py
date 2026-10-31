@@ -164,12 +164,16 @@ def main():
     for i, r in enumerate(rows): r["rank"] = i + 1
     # 五绝归山
     pc = cfg["portfolio"]; picks, nb = [], 0
+    icap = pc.get("industry_cap")  # 单一行业权重上限%，等权下每行业最多 floor(cap*n/100) 只（至少1只）
+    ind_n, ind_skipped = {}, []
     for r in rows:
         if r["red"] or not r["screen"]: continue
+        if icap is not None and ind_n.get(r["ind"], 0) >= max(1, int(icap * pc["n"] / 100 + 1e-9)):
+            ind_skipped.append(f'{r["name"]}({r["code"]},{r["ind"]})'); continue
         if r["type"] == "bank":
             if nb >= pc["max_banks"]: continue
             nb += 1
-        picks.append(r)
+        picks.append(r); ind_n[r["ind"]] = ind_n.get(r["ind"], 0) + 1
         if len(picks) == pc["n"]: break
     w = {r["code"]: 100 / len(picks) for r in picks}
     for r in picks:
@@ -190,7 +194,7 @@ def main():
            "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "bank_cap", "portfolio")},
            "dims": DIMS, "pool_candidates": len(pool), "bank_dropped": dropped, "fin_failed": fin.get("failed", []),
            "missing_kline": [p["code"] for p in pool if not K.get(p["code"])], "missing_quotes": [p["code"] for p in pool if sym(p) not in Q],
-           "portfolio": {"name": pc["name"], "items": port, "industry": inds}, "rows": rows}
+           "portfolio": {"name": pc["name"], "items": port, "industry": inds, "industry_skipped": ind_skipped}, "rows": rows}
     save("data/latest.json", out)
     print("rows", len(rows), "dropped banks", dropped)
     for r in rows[:10]: print(r["rank"], r["name"], r["total"], r["level"], r["vtier"])

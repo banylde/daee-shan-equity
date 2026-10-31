@@ -984,6 +984,7 @@
   "name": "五绝归山",
   "n": 5,
   "max_banks": 1,
-  "bank_weight_cap": 10
+  "bank_weight_cap": 10,
+ "industry_cap": 25
  }
 }
