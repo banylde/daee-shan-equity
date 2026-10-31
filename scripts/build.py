@@ -58,6 +58,8 @@ def main():
     select = "--select" in sys.argv  # 每周：对全部候选打分并取前N入池；每日：只对池内股票打分
     cand = load("data/candidates.json"); CM = {x["code"]: x for x in cand["candidates"]}
     codes = list(CM) if select else [c for c in load("data/pool.json")["codes"] if c in CM]
+    for c_, o_ in cfg.get("type_override", {}).items():  # 人工修正机构类型/行业（如江苏金租：东财标银行，实为非银金融）
+        if c_ in CM and not c_.startswith("_"): CM[c_].update({k_: v_ for k_, v_ in o_.items() if not k_.startswith("_")})
     pool = [{**CM[c], "ind_fine": CM[c]["ind"]} for c in codes]
     sym = lambda p: p["mkt"] + p["code"]
     Q = quotes([sym(p) for p in pool])
@@ -95,6 +97,9 @@ def main():
         else:
             v = V.get(c) or {}; pe, pb, vdate = v.get("PE_TTM"), v.get("PB_MRQ"), (v.get("TRADE_DATE") or "")[:10]
         x["pe_pct"], x["pb_pct"] = pct(f.get("pe_hist", []), pe), pct(f.get("pb_hist", []), pb)
+        hs = cfg["hk_val_history"]
+        val_short = hk and min(len(f.get("pe_hist", [])), len(f.get("pb_hist", []))) < max(hs["min_points"], int(hs["min_years"] * 250 / 5))
+        if val_short: x["pe_pct"] = x["pb_pct"] = None  # 港股估值历史不足（<8点或<3年）：分位记不确定、不计分
         x["spread"] = x["ttm_yield"] - bond["yield"] if x["ttm_yield"] is not None and bond else None
         e5 = [eps.get(y) for y in yrs[:5] if eps.get(y) is not None]
         x["norm_pe"] = price / (mean(e5) * conv) if p["cyc"] and len(e5) >= 3 and mean(e5) > 0 else None
@@ -138,12 +143,14 @@ def main():
             lv = round(mean(v) / 25) * 25
             if d == "discipline" and cut_block: lv = min(lv, dcfg["discipline_cap"])
             if d == "growth": dsc[d] = round(mean(v), 1); continue
+            if d == "valuation":  # 估值分归一到0–100：档分×(100−tb)/100 + tb×排名分位，不超100且保持排序
+                tb = cfg["tie_break_max"]; dsc[d] = round(lv * (100 - tb) / 100 + tb * mean(rk.get(d, [0.5])), 1); continue
             dsc[d] = round(lv + cfg["tie_break_max"] * mean(rk.get(d, [0.5])), 1) if not (d == "discipline" and cut_block) else lv
         avail = [d for d, _ in DIMS if dsc[d] is not None]
         total = sum(dsc[d] * W[d] for d in avail) / sum(W[d] for d in avail) if avail else 0
         miss_w = sum(W[d] for d, _ in DIMS if dsc[d] is None)
         valp = mean([x["pe_pct"], x["pb_pct"]])
-        insufficient = miss_w > 20 or valp is None or x["ttm_yield"] is None
+        insufficient = miss_w > 20 or (valp is None and not val_short) or x["ttm_yield"] is None
         # 红线
         red, warn = [], []
         if "ST" in q["name"].upper(): red.append("a 名称含ST")
@@ -164,13 +171,14 @@ def main():
         screen = x["ttm_yield"] is not None and x["ttm_yield"] >= cfg["screen"]["min_ttm_yield"]
         qpass = not red and (dsc["quality"] or 0) >= cfg["valuation_tier"]["quality_pass_min"] and (dsc["cash"] or 0) >= cfg["valuation_tier"]["quality_pass_min"]
         vt = cfg["valuation_tier"]
-        vtier = "C" if insufficient or valp is None or valp > vt["B_below"] or not qpass else ("A" if valp < vt["A_below"] else "B")
+        vtier = "不确定" if val_short else "C" if insufficient or valp is None or valp > vt["B_below"] or not qpass else ("A" if valp < vt["A_below"] else "B")
         if red: lvl = "红线否决"
         elif not screen: lvl = "未过初筛"
         elif total >= cfg["tiers"]["focus"] and not insufficient: lvl = "重点研究"
         elif total >= cfg["tiers"]["watch"]: lvl = "观察"
         else: lvl = "暂缓"
         d3 = [dps.get(y) for y in yrs[:3]]
+        if len(d3) == 3 and d3[0] is None and len(yrs) >= 4: d3 = [dps.get(y) for y in yrs[1:4]]  # 最新财年分红尚未宣派（如3月年结港股）→ 用前3个财年
         min3 = min(d or 0 for d in d3) if len(d3) == 3 else None
         # 五绝流动性门槛（不影响入池）
         lq = cfg["liquidity_gate"]; liq = []
@@ -195,7 +203,7 @@ def main():
         hist = [{"year": y, "dps": r2(dps.get(y), 4), "eps": r2(eps.get(y), 3)} for y in yrs[:5]]
         return ({**{k2: p[k2] for k2 in ("code", "mkt", "ind", "ind_fine", "type")}, "cyc": bool(p["cyc"]), "ind2": p.get("ind2"), "ind_src": p.get("ind_src"), "roic3": p.get("roic"), "name": q["name"], "price": price, "currency": cur,
             "val_date": vdate, "fin_period": f.get("fin_period"), "latest_period": f.get("latest_period"), "fin_currency": f.get("currency"),
-            "pe": r2(pe), "pb": r2(pb), "val_pct": r2(valp, 1), "hist_note": f.get("hist_note"),
+            "pe": r2(pe), "pb": r2(pb), "val_pct": r2(valp, 1), "val_short": val_short, "hist_note": f.get("hist_note"),
             "ttm_yield": r2(x["ttm_yield"]), "stress_yield": r2(min3 / price * 100 * 0.7 if min3 is not None and price else None), "stress_base_dps": r2(min3, 4),
             "stress_cover": r2(e0 * conv * 0.8 / dps[yrs[0]] if e0 and yrs and dps.get(yrs[0]) else None),
             "dims": dsc, "basis": basis, "total": round(total, 1), "insufficient": insufficient, "missing_dims": [n for d, n in DIMS if dsc[d] is None],
@@ -225,6 +233,16 @@ def main():
     drop_codes = {r["code"] for r in banks[bc["max_banks"]:]}
     rows = [r for r in rows if r["code"] not in drop_codes]
     rows.sort(key=lambda r: (r["level"] == "红线否决", -r["total"]))
+    # A/H去重：同名公司只保留池评分高者（并列取20日成交额折人民币高者）
+    nm = lambda n: n.replace(" ", "").replace("-WD", "").replace("-W", "").replace("-SW", "").replace("-S", "")
+    liq = lambda r: (r.get("amount_avg") or 0) * (fx["HKDCNY"] if r["currency"] == "HKD" else 1)
+    best, ah_dropped = {}, []
+    for r in rows:
+        k_ = nm(r["name"]); b_ = best.get(k_)
+        if b_ is None or (r["total"], liq(r)) > (b_["total"], liq(b_)): best[k_] = r
+    keep = {id(v) for v in best.values()}
+    ah_dropped = [f'{r["name"]}({r["code"]},{r["total"]})→保留{best[nm(r["name"])]["code"]}' for r in rows if id(r) not in keep]
+    rows = [r for r in rows if id(r) in keep]
     if select:
         fin_dropped = [f'{r["name"]}({r["code"]}):' + "；".join(r["fin_fail"]) for r in rows if r["fin_fail"]]
         rows = [r for r in rows if not r["fin_fail"]][:cfg["screen"]["pool_size"]]
@@ -233,11 +251,11 @@ def main():
     # 五绝归山
     pc = cfg["portfolio"]; picks, nb = [], 0
     # 第二阶段：池内 无红线+流动性门槛+无股息削减禁入 → 按估值层A>B>C、再按估值维度分排序；每个申万一级行业1只；银行≤1只；A/B不足5只才用C
-    tord = {"A": 0, "B": 1, "C": 2}
+    tord = {"A": 0, "B": 1, "不确定": 2, "C": 3}; cons = set(pc["consumer_group"]); ncons = 0
     vs = lambda r: (r["dims"].get("valuation") if r["dims"].get("valuation") is not None else -1)
     order = sorted(rows, key=lambda r: (tord.get(r["vtier"], 3), -vs(r), -r["total"]))
     ind_n, ind_skipped, blocked = {}, [], []
-    for allow in (("A", "B"), ("C",)):
+    for allow in (("A", "B"), ("不确定",), ("C",)):
         if len(picks) >= pc["n"]: break
         for r in order:
             if r["vtier"] not in allow: continue
@@ -247,9 +265,12 @@ def main():
                 blocked.append(f'{r["name"]}({r["code"]},估值{r["vtier"]}/{vs(r)}): ' + "；".join(why)); continue
             if ind_n.get(r["ind"], 0) >= pc["per_industry"]:
                 ind_skipped.append(f'{r["name"]}({r["code"]},{r["ind"]},估值{r["vtier"]}/{vs(r)})'); continue
+            if r["ind"] in cons and ncons >= pc["consumer_max"]:
+                ind_skipped.append(f'{r["name"]}({r["code"]},{r["ind"]},大消费已满{pc["consumer_max"]}只)'); continue
             if r["type"] == "bank":
                 if nb >= pc["max_banks"]: ind_skipped.append(f'{r["name"]}({r["code"]},银行已满{pc["max_banks"]}只)'); continue
                 nb += 1
+            ncons += r["ind"] in cons
             picks.append(r); ind_n[r["ind"]] = ind_n.get(r["ind"], 0) + 1
             if len(picks) == pc["n"]: break
     w = {r["code"]: 100 / len(picks) for r in picks}
@@ -268,8 +289,8 @@ def main():
     inds = {}
     for p_ in port: inds[p_["ind"]] = round(inds.get(p_["ind"], 0) + p_["weight"], 2)
     out = {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "data_date": data_date, "fin_updated_at": fin["updated_at"],
-           "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "portfolio", "tie_break_max", "dividend_cut", "liquidity_gate", "fin_track", "growth")}, "screen_stats": cand["stats"], "screen_updated_at": cand["updated_at"],
-           "dims": DIMS, "pool_candidates": len(pool), "bank_dropped": dropped, "fin_dropped": fin_dropped if select else load("data/latest.json", {}).get("fin_dropped", []), "fin_failed": fin.get("failed", []),
+           "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "portfolio", "tie_break_max", "dividend_cut", "liquidity_gate", "fin_track", "growth", "hk_val_history", "type_override")}, "screen_stats": cand["stats"], "screen_updated_at": cand["updated_at"],
+           "dims": DIMS, "pool_candidates": len(pool), "bank_dropped": dropped, "ah_dropped": ah_dropped if select else load("data/latest.json", {}).get("ah_dropped", []), "fin_dropped": fin_dropped if select else load("data/latest.json", {}).get("fin_dropped", []), "fin_failed": fin.get("failed", []),
            "missing_kline": [p["code"] for p in pool if not K.get(p["code"])], "missing_quotes": [p["code"] for p in pool if sym(p) not in Q],
            "portfolio": {"name": pc["name"], "items": port, "industry": inds, "industry_skipped": ind_skipped, "blocked": blocked}, "rows": rows}
     save("data/latest.json", out)

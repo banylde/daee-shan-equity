@@ -61,7 +61,7 @@ def main():
         if m not in ("SH", "SZ", "BJ") or not c[:1].isdigit(): continue
         ra.setdefault(c, {})[x["REPORT_DATE"][:4]] = x["ROIC"]; amk[c] = m.lower()
         rea.setdefault(c, {})[x["REPORT_DATE"][:4]] = x["ROEJQ"]
-        if x.get("ORG_TYPE") in ("银行", "保险"): org[c] = x["ORG_TYPE"]
+        if x.get("ORG_TYPE") in ("银行", "保险") and c not in load("config.json").get("type_override", {}): org[c] = x["ORG_TYPE"]
     # 1 全A：东财数据中心近3年有年报的沪深北A股（B股除外），以腾讯行情确认有报价
     A = [c for c in amk if not c.startswith(("2", "9")) or c.startswith("92")]
     st["a_universe"] = len(A)
