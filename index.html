@@ -39,10 +39,10 @@ function render(){const fi=document.getElementById("fi").value,fl=document.getEl
 let rows=D.rows.filter(r=>(!fi||r.ind===fi)&&(!fl||r.level===fl));
 rows.sort((a,b)=>{let x=val(a,key),y=val(b,key);if(x==null)return 1;if(y==null)return -1;if(typeof x==="string")return asc?x.localeCompare(y):y.localeCompare(x);return asc?x-y:y-x});
 document.getElementById("cnt").textContent=`显示 ${rows.length} / ${D.rows.length} 只 · 点击表头排序，点击行看详情`;
-document.querySelector("thead tr").innerHTML=COLS.map(([k,l])=>`<th data-k="${k}" class="${k===key?'s':''}">${l}${k===key?(asc?' ▲':' ▼'):''}</th>`).join("");
-document.querySelector("tbody").innerHTML=rows.map(r=>`<tr data-c="${r.code}">`+COLS.map(([k])=>`<td>${cell(r,k)}</td>`).join("")+"</tr>").join("");
-document.querySelectorAll("th").forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(k===key)asc=!asc;else{key=k;asc=["rank","name","code","ind","level","vtier","pe","pb","val_pct"].includes(k)}render()});
-document.querySelectorAll("tbody tr").forEach(tr=>tr.onclick=()=>detail(tr.dataset.c))}
+document.querySelector("#t thead tr").innerHTML=COLS.map(([k,l])=>`<th data-k="${k}" class="${k===key?'s':''}">${l}${k===key?(asc?' ▲':' ▼'):''}</th>`).join("");
+document.querySelector("#t tbody").innerHTML=rows.map(r=>`<tr data-c="${r.code}">`+COLS.map(([k])=>`<td>${cell(r,k)}</td>`).join("")+"</tr>").join("");
+document.querySelectorAll("#t th").forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(k===key)asc=!asc;else{key=k;asc=["rank","name","code","ind","level","vtier","pe","pb","val_pct"].includes(k)}render()});
+document.querySelectorAll("#t tbody tr").forEach(tr=>tr.onclick=()=>detail(tr.dataset.c))}
 function detail(c){const r=D.rows.find(x=>x.code===c),el=document.getElementById("det");el.style.display="block";
 const b=Object.entries(r.basis).map(([k,x])=>`<tr><td>${DN[x.dim]}</td><td>${x.label}</td><td>${M(x.v)}</td><td>${x.s==null?'—':x.s}</td></tr>`).join("");
 el.innerHTML=`<h3>${r.name} ${r.code} · ${r.ind} · 总分 ${r.total} · <span class="${LV[r.level]}">${r.level}</span> · 估值层 ${r.vtier}</h3>
