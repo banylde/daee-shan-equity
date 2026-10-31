@@ -47,6 +47,8 @@ def a_stock(code, mkt, typ):
     r["years"] = yrs
     r["eps"] = {m["REPORT_DATE"][:4]: f(m["EPSJB"]) for m in mi}
     r["np"] = {m["REPORT_DATE"][:4]: f(m["PARENTNETPROFIT"]) for m in mi}
+    r["rev"] = {m["REPORT_DATE"][:4]: f(m.get("TOTALOPERATEREVE")) for m in mi}
+    r["np_kf"] = {m["REPORT_DATE"][:4]: f(m.get("KCFJCXSYJLR")) for m in mi}
     r["roe"] = [f(m.get("ROEKCJQ")) if m.get("ROEKCJQ") is not None else f(m.get("ROEJQ")) for m in mi[:5]]
     r["roic"] = [f(m.get("ROIC")) for m in mi[:5]]
     r["gm"] = [f(m.get("XSMLL")) for m in mi[:5]]
@@ -98,6 +100,25 @@ def items(report, sec, date):
     rows = em(report, f'(SECUCODE="{sec}")(DATE_TYPE_CODE="001")(REPORT_DATE=\'{date}\')', cols="STD_ITEM_NAME,AMOUNT", size=300)
     return {x["STD_ITEM_NAME"]: f(x["AMOUNT"]) for x in rows if x.get("AMOUNT") is not None}
 
+def hk_val_hist(code, allq, k):
+    if not k: return [], []
+    try:
+        d = json.loads(get(f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=hk{code},day,,,1300,", tries=6))["data"]["hk" + code]
+        kl = d.get("day") or d.get("qfqday") or []
+    except Exception:
+        return [], []
+    q = sorted([(dt.datetime.strptime(x["REPORT_DATE"][:10], "%Y-%m-%d") + dt.timedelta(days=90), f(x.get("EPS_TTM")), f(x.get("BPS")))
+                for x in allq if x.get("REPORT_DATE")], key=lambda t: t[0])
+    pe, pb = [], []
+    for row in kl[::5]:
+        day = dt.datetime.strptime(row[0], "%Y-%m-%d"); c = float(row[2])
+        cur = [t for t in q if t[0] <= day]
+        if not cur: continue
+        _, e, b = cur[-1]
+        if e and e > 0: pe.append(c / (e * k))
+        if b and b > 0: pb.append(c / (b * k))
+    return pe, pb
+
 def hk_stock(code, typ, fx):
     sec = f"{code}.HK"
     mi = em("RPT_HKF10_FN_MAININDICATOR", f'(SECUCODE="{sec}")(DATE_TYPE_CODE="001")', size=6, sort="REPORT_DATE")
@@ -110,6 +131,8 @@ def hk_stock(code, typ, fx):
     r["years"] = yrs
     r["eps"] = {m["REPORT_DATE"][:4]: f(m["BASIC_EPS"]) for m in mi}
     r["np"] = {m["REPORT_DATE"][:4]: f(m["HOLDER_PROFIT"]) for m in mi}
+    r["rev"] = {m["REPORT_DATE"][:4]: f(m.get("OPERATE_INCOME")) for m in mi}
+    r["np_kf"] = r["np"]  # 港股无扣非口径，用归母净利润代替
     r["roe"] = [f(m.get("ROE_AVG")) for m in mi[:5]]
     r["roic"] = [f(m.get("ROIC_YEARLY")) for m in mi[:5]]
     r["gm"] = [f(m.get("GROSS_PROFIT_RATIO")) for m in mi[:5]]
@@ -120,9 +143,10 @@ def hk_stock(code, typ, fx):
     r["ocf_ni_y"] = [(f(m["PER_NETCASH_OPERATE"]) / f(m["BASIC_EPS"])) if m.get("PER_NETCASH_OPERATE") is not None and m.get("BASIC_EPS") else None for m in mi[:3]]
     if allq:
         r["eps_ttm"], r["bps"] = f(allq[0].get("EPS_TTM")), f(allq[0].get("BPS"))
-    r["pe_hist"] = [f(x["PE_TTM"]) for x in allq if x.get("PE_TTM") is not None]
-    r["pb_hist"] = [f(x["PB_TTM"]) for x in allq if x.get("PB_TTM") is not None]
-    r["hist_note"] = "季度报告期采样"
+    # 估值历史：东财港股PE_TTM/PB_TTM历史列为当前值重复（不可用），改为 日K收盘(不复权) ÷ 当时可得的EPS_TTM/BPS
+    # 报告期+90天视为可得；财报币种按当前汇率折港币（近似）；5日采样；不足8点则build记为不确定
+    r["pe_hist"], r["pb_hist"] = hk_val_hist(code, allq, k)
+    r["hist_note"] = "日K收盘÷当期EPS_TTM/BPS(5日采样,报告期+90天可得,现汇率折算)"
     dv = em("RPT_HKF10_MAIN_DIVBASIC", f'(SECUCODE="{sec}")', cols="YEAR,REPORT_TYPE,EX_DIVIDEND_DATE,PLAN_EXPLAIN", size=40, sort="NOTICE_DATE")
     ev, byyear = [], {}
     for d in dv:

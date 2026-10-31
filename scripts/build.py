@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from common import *
 
 DIMS = [("dividend", "股息吸引力"), ("quality", "盈利质量"), ("cash", "现金与偿债"), ("discipline", "分红纪律"),
-        ("moat", "护城河与治理"), ("valuation", "估值与安全边际"), ("volatility", "波动与流动性")]
+        ("moat", "护城河与治理"), ("valuation", "估值与安全边际"), ("volatility", "波动与流动性"), ("growth", "成长性")]
 
 def quotes(syms):
     out = {}
@@ -109,13 +109,22 @@ def main():
             x["amount_avg"] = mean([z[1] * z[2] * (1 if hk else 100) for z in k[-20:]]) / 1e8
         x["fscore"] = (f["fscore"] * 9 / f["fscore_n"]) if f.get("fscore_n", 0) >= 6 else None
         x["nbv_rate"] = f.get("nbv_rate")
+        # 成长性：3年复合增速（最新财年 vs 3年前）；基期≤0或缺失→None
+        def cagr(dd):
+            if len(yrs) < 4: return None
+            a, b = dd.get(yrs[0]), dd.get(yrs[3])
+            if a is None or not b or b <= 0: return None
+            return ((a / b) ** (1 / 3) - 1) * 100 if a > 0 else -100.0
+        x["rev_cagr3"], x["np_cagr3"], x["dps_cagr3"] = cagr(f.get("rev", {})), cagr(f.get("np_kf", {})), cagr(dps)
         if ranks is None: return x
         # 打分：先按分界点得 0/25/50/75/100 档位，再加同类候选内原始值排名分位×tie_break_max 作小数（不跨档，用于打破并列）
         basis, dims, rk = {}, {}, {}
         for key, m in M.items():
             if m.get("types") and p["type"] not in m["types"]: continue
             if m.get("cyclical_only") and not p["cyc"]: continue
-            s = tier(x.get(key), m)
+            if m.get("continuous"):  # 连续打分：负增长0分，否则同类候选内排名分位×100（超过cap按cap计）
+                v_ = x.get(key); s = None if v_ is None else (0 if v_ < 0 else round(100 * ranks.get((c, key), 0.5), 1))
+            else: s = tier(x.get(key), m)
             basis[key] = {"v": r2(x.get(key)), "s": s, "pct": r2(ranks.get((c, key)), 2), "label": m["label"], "dim": m["dim"]}
             if s is not None: dims.setdefault(m["dim"], []).append(s); rk.setdefault(m["dim"], []).append(ranks.get((c, key), 0.5))
         # 股息削减：近3年DPS同比下降≥2次 → 分红纪律封顶25、禁入五绝
@@ -128,6 +137,7 @@ def main():
             if not v: dsc[d] = None; continue
             lv = round(mean(v) / 25) * 25
             if d == "discipline" and cut_block: lv = min(lv, dcfg["discipline_cap"])
+            if d == "growth": dsc[d] = round(mean(v), 1); continue
             dsc[d] = round(lv + cfg["tie_break_max"] * mean(rk.get(d, [0.5])), 1) if not (d == "discipline" and cut_block) else lv
         avail = [d for d, _ in DIMS if dsc[d] is not None]
         total = sum(dsc[d] * W[d] for d in avail) / sum(W[d] for d in avail) if avail else 0
@@ -199,11 +209,12 @@ def main():
     ranks = {}
     for key, m in M.items():
         for t in ("general", "bank", "insurance"):
-            vals = sorted(x[key] for p, x in pre if p["type"] == t and x.get(key) is not None)
+            cv = (lambda v: min(v, m["cap"])) if m.get("continuous") else (lambda v: v)
+            vals = sorted(cv(x[key]) for p, x in pre if p["type"] == t and x.get(key) is not None)
             if len(vals) < 2: continue
             for p, x in pre:
                 if p["type"] == t and x.get(key) is not None:
-                    v = x[key]; lo = sum(1 for z in vals if z < v); eq = sum(1 for z in vals if z == v)
+                    v = cv(x[key]); lo = sum(1 for z in vals if z < v); eq = sum(1 for z in vals if z == v)
                     q_ = (lo + (eq - 1) / 2) / (len(vals) - 1)
                     ranks[(p["code"], key)] = q_ if m["dir"] == 1 else 1 - q_
     rows = [r for r in (one(p, ranks) for p, _ in pre) if r]
@@ -221,21 +232,26 @@ def main():
     for i, r in enumerate(rows): r["rank"] = i + 1
     # 五绝归山
     pc = cfg["portfolio"]; picks, nb = [], 0
-    icap = pc.get("industry_cap")  # 单一行业权重上限%，等权下每行业最多 floor(cap*n/100) 只（至少1只）
+    # 第二阶段：池内 无红线+流动性门槛+无股息削减禁入 → 按估值层A>B>C、再按估值维度分排序；每个申万一级行业1只；银行≤1只；A/B不足5只才用C
+    tord = {"A": 0, "B": 1, "C": 2}
+    vs = lambda r: (r["dims"].get("valuation") if r["dims"].get("valuation") is not None else -1)
+    order = sorted(rows, key=lambda r: (tord.get(r["vtier"], 3), -vs(r), -r["total"]))
     ind_n, ind_skipped, blocked = {}, [], []
-    for r in rows:
-        if r["red"] or not r["screen"]: continue
-        why = (["近3年股息削减≥%d次" % cfg["dividend_cut"]["min_cuts"]] if r["cut_block"] else []) + r["liq_block"] + r["fin_fail"]
-        if why:
-            if len(picks) < pc["n"]: blocked.append(f'{r["name"]}({r["code"]},{r["total"]}): ' + "；".join(why))
-            continue
-        if icap is not None and ind_n.get(r["ind_fine"], 0) >= max(1, int(icap * pc["n"] / 100 + 1e-9)):
-            ind_skipped.append(f'{r["name"]}({r["code"]},{r["ind_fine"]})'); continue
-        if r["type"] == "bank":
-            if nb >= pc["max_banks"]: continue
-            nb += 1
-        picks.append(r); ind_n[r["ind_fine"]] = ind_n.get(r["ind_fine"], 0) + 1
-        if len(picks) == pc["n"]: break
+    for allow in (("A", "B"), ("C",)):
+        if len(picks) >= pc["n"]: break
+        for r in order:
+            if r["vtier"] not in allow: continue
+            why = (["红线：" + "、".join(map(str, r["red"]))] if r["red"] else []) + (["未过质量初筛"] if not r["screen"] else []) + \
+                  (["近3年股息削减≥%d次" % cfg["dividend_cut"]["min_cuts"]] if r["cut_block"] else []) + r["liq_block"] + r["fin_fail"]
+            if why:
+                blocked.append(f'{r["name"]}({r["code"]},估值{r["vtier"]}/{vs(r)}): ' + "；".join(why)); continue
+            if ind_n.get(r["ind"], 0) >= pc["per_industry"]:
+                ind_skipped.append(f'{r["name"]}({r["code"]},{r["ind"]},估值{r["vtier"]}/{vs(r)})'); continue
+            if r["type"] == "bank":
+                if nb >= pc["max_banks"]: ind_skipped.append(f'{r["name"]}({r["code"]},银行已满{pc["max_banks"]}只)'); continue
+                nb += 1
+            picks.append(r); ind_n[r["ind"]] = ind_n.get(r["ind"], 0) + 1
+            if len(picks) == pc["n"]: break
     w = {r["code"]: 100 / len(picks) for r in picks}
     for r in picks:
         if r["type"] == "bank" and w[r["code"]] > pc["bank_weight_cap"]:
@@ -244,15 +260,15 @@ def main():
             for o in others: w[o["code"]] += extra * w[o["code"]] / tot
     names = dict(DIMS); port = []
     for r in picks:
-        ds = sorted([(v, d) for d, v in r["dims"].items() if v is not None], reverse=True)
-        reason = f'总分{r["total"]}；强项：' + "、".join(f"{names[d]}{v}" for v, d in ds[:2]) + f'；近12月股息率{r["ttm_yield"]}%'
+        ds = sorted([(v, d) for d, v in r["dims"].items() if v is not None and d != "valuation"], reverse=True)
+        reason = f'池评分{r["total"]}；估值{r["vtier"]}层/{r["dims"].get("valuation")}分；强项：' + "、".join(f"{names[d]}{v}" for v, d in ds[:2]) + f'；近12月股息率{r["ttm_yield"]}%'
         risk = [f"{names[d]}仅{v}分" for v, d in ds[-2:] if v <= 50] + r["warn"]
-        port.append({"code": r["code"], "name": r["name"], "ind": r["ind"], "ind_fine": r["ind_fine"], "type": r["type"], "total": r["total"], "weight": round(w[r["code"]], 2),
+        port.append({"code": r["code"], "name": r["name"], "ind": r["ind"], "ind_fine": r["ind_fine"], "type": r["type"], "total": r["total"], "weight": round(w[r["code"]], 2), "val_score": r["dims"].get("valuation"),
                      "vtier": r["vtier"], "reason": reason, "risk": risk or ["未发现显著短板，仍需人工复核"]})
     inds = {}
-    for p_ in port: inds[p_["ind_fine"]] = round(inds.get(p_["ind_fine"], 0) + p_["weight"], 2)
+    for p_ in port: inds[p_["ind"]] = round(inds.get(p_["ind"], 0) + p_["weight"], 2)
     out = {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "data_date": data_date, "fin_updated_at": fin["updated_at"],
-           "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "portfolio", "tie_break_max", "dividend_cut", "liquidity_gate", "fin_track")}, "screen_stats": cand["stats"], "screen_updated_at": cand["updated_at"],
+           "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "portfolio", "tie_break_max", "dividend_cut", "liquidity_gate", "fin_track", "growth")}, "screen_stats": cand["stats"], "screen_updated_at": cand["updated_at"],
            "dims": DIMS, "pool_candidates": len(pool), "bank_dropped": dropped, "fin_dropped": fin_dropped if select else load("data/latest.json", {}).get("fin_dropped", []), "fin_failed": fin.get("failed", []),
            "missing_kline": [p["code"] for p in pool if not K.get(p["code"])], "missing_quotes": [p["code"] for p in pool if sym(p) not in Q],
            "portfolio": {"name": pc["name"], "items": port, "industry": inds, "industry_skipped": ind_skipped, "blocked": blocked}, "rows": rows}

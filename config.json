@@ -11,13 +11,14 @@
   "fin_roe_min": 10
  },
  "weights": {
-  "dividend": 10,
-  "quality": 20,
+  "quality": 25,
+  "growth": 20,
   "cash": 20,
-  "discipline": 10,
   "moat": 15,
-  "valuation": 20,
-  "volatility": 5
+  "discipline": 10,
+  "dividend": 5,
+  "volatility": 5,
+  "valuation": 0
  },
  "tiers": {
   "focus": 80,
@@ -355,6 +356,27 @@
    "types": [
     "insurance"
    ]
+  },
+  "rev_cagr3": {
+   "dim": "growth",
+   "dir": 1,
+   "continuous": true,
+   "cap": 50,
+   "label": "营收3年复合增速%"
+  },
+  "np_cagr3": {
+   "dim": "growth",
+   "dir": 1,
+   "continuous": true,
+   "cap": 50,
+   "label": "扣非净利润3年复合增速%（港股归母）"
+  },
+  "dps_cagr3": {
+   "dim": "growth",
+   "dir": 1,
+   "continuous": true,
+   "cap": 50,
+   "label": "每股分红3年复合增速%"
   }
  },
  "manual_flags": {
@@ -366,7 +388,8 @@
   "n": 5,
   "max_banks": 1,
   "bank_weight_cap": 10,
-  "industry_cap": 25
+  "per_industry": 1,
+  "_note": "五绝：池内无红线+流动性门槛+无股息削减禁入，按估值层A>B>C再按估值分排序，每申万一级行业1只，银行≤1只且权重≤10%，A/B不足5只才用C"
  },
  "_pool_note": "非金融：近3财年ROIC均值>roic_min且每年≥roic_floor_each；银行/保险（东财ORG_TYPE）独立通道：近3年ROE每年>fin_roe_min，且不良率/拨备/核心一级（银行）、偿付能力（保险）在数据可得时须达fin_track门槛；股息率≥min_ttm_yield；按总分取前pool_size，银行≤bank_pool_cap",
  "tie_break_max": 4.9,
@@ -392,5 +415,11 @@
  "validity": {
   "min_days": 28,
   "_note": "仅展示，不参与打分；快照每周记录"
- }
+ },
+ "growth": {
+  "cap_pct": 50,
+  "years": 3,
+  "note": "每项在同类(普通/银行/保险)候选内连续排名；负增长该项0分；>50%按50%计不额外加分；港股净利润为归母（无扣非）"
+ },
+ "_weights_note": "池评分（入池前100、80/60分层）不含估值；估值维度照算、单独展示，仅用于五绝排序"
 }
