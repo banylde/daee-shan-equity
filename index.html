@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>山部 · 大鹅基金股权投资看板</title>
+<meta name="theme-color" content="#0f1115"><link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg"><link rel="apple-touch-icon" href="icons/icon-192.png">
+<style>
+:root{--bg:#0f1115;--card:#171a21;--line:#262a33;--fg:#e6e8eb;--mute:#8a919c;--up:#f0525c;--dn:#2fbf71;--hl:#f5c451}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:12px 12px calc(12px + env(safe-area-inset-bottom))}
+h1{font-size:18px;margin:4px 0}h3{font-size:15px;margin:4px 0}.mute{color:var(--mute);font-size:12px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0}
+.warnbar{border-color:var(--hl);color:var(--hl)}
+.wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;width:100%;min-width:900px;font-variant-numeric:tabular-nums}
+th,td{padding:6px 7px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}th{position:sticky;top:0;background:#1c2029;cursor:pointer;user-select:none;font-weight:500;color:var(--mute)}
+th.s{color:var(--fg)}td:nth-child(2),th:nth-child(2){text-align:left;position:sticky;left:0;background:var(--card)}tbody tr{cursor:pointer}tbody tr:hover td{background:#1f2430}
+.L1{color:var(--hl)}.L2{color:var(--fg)}.L3,.L5{color:var(--mute)}.L4{color:var(--up)}.miss{color:var(--mute);font-size:12px}
+select{background:#222733;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 6px;margin-right:6px}
+.pt td,.pt th{white-space:normal;text-align:left}.pt{min-width:0}.tag{font-size:11px;padding:0 5px;border-radius:4px;border:1px solid var(--mute);margin-left:4px}
+.bar{display:inline-block;height:8px;background:var(--hl);border-radius:4px;vertical-align:middle}
+#det{display:none}footer{margin:16px 0;text-align:center;color:var(--hl);font-size:13px}
+</style></head><body>
+<h1>山部 · 大鹅基金股权投资看板</h1>
+<div class="mute">红利为基 · 质量为核 · 估值为尺｜先排雷、再评质、后估值</div>
+<div class="mute" id="meta">加载中…</div>
+<div class="card warnbar">⚠ 七维权重、档位分界、初筛与分层门槛均为<b>默认参数，待鹅哥确认</b>（集中在仓库 config.json）。</div>
+<div class="card" id="port"></div>
+<div class="card"><select id="fi"></select><select id="fl"></select><span class="mute" id="cnt"></span></div>
+<div class="wrap"><table id="t"><thead><tr></tr></thead><tbody></tbody></table></div>
+<div class="card" id="det"></div>
+<div class="card mute" id="method"></div>
+<footer>权重与门槛为待回测参数；高分不等于买入信号。<br><span class="mute">仅为个人研究工具，不构成投资建议</span></footer>
+<script>
+const DN={dividend:"股息",quality:"盈利质量",cash:"现金偿债",discipline:"分红纪律",moat:"护城河",valuation:"估值",volatility:"波动流动"};
+const COLS=[["rank","#"],["name","名称"],["code","代码"],["ind","行业"],["total","总分"],["level","分层"],["vtier","估值层"],...Object.keys(DN).map(k=>["d_"+k,DN[k]]),["ttm_yield","股息率%"],["stress_yield","股息-30%"],["stress_cover","利润-20%覆盖"],["pe","PE"],["pb","PB"],["val_pct","PE/PB分位%"],["price","现价"]];
+const LV={"重点研究":"L1","观察":"L2","暂缓":"L3","红线否决":"L4","未过初筛":"L5"};let D,key="rank",asc=true;
+const M=v=>v==null?'<span class="miss">缺失</span>':v;
+const val=(r,k)=>k.startsWith("d_")?r.dims[k.slice(2)]:r[k];
+function cell(r,k){const v=val(r,k);if(k==="level")return`<span class="${LV[v]}">${v}</span>`;if(k==="name")return r.name+(r.mkt==="hk"?'<span class="tag">H</span>':'')+(r.insufficient?'<span class="tag">数据不足</span>':'');if(k==="price")return v+" "+r.currency;if(k==="stress_cover")return v==null?M(v):v+"倍";return M(v)}
+function render(){const fi=document.getElementById("fi").value,fl=document.getElementById("fl").value;
+let rows=D.rows.filter(r=>(!fi||r.ind===fi)&&(!fl||r.level===fl));
+rows.sort((a,b)=>{let x=val(a,key),y=val(b,key);if(x==null)return 1;if(y==null)return -1;if(typeof x==="string")return asc?x.localeCompare(y):y.localeCompare(x);return asc?x-y:y-x});
+document.getElementById("cnt").textContent=`显示 ${rows.length} / ${D.rows.length} 只 · 点击表头排序，点击行看详情`;
+document.querySelector("thead tr").innerHTML=COLS.map(([k,l])=>`<th data-k="${k}" class="${k===key?'s':''}">${l}${k===key?(asc?' ▲':' ▼'):''}</th>`).join("");
+document.querySelector("tbody").innerHTML=rows.map(r=>`<tr data-c="${r.code}">`+COLS.map(([k])=>`<td>${cell(r,k)}</td>`).join("")+"</tr>").join("");
+document.querySelectorAll("th").forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(k===key)asc=!asc;else{key=k;asc=["rank","name","code","ind","level","vtier","pe","pb","val_pct"].includes(k)}render()});
+document.querySelectorAll("tbody tr").forEach(tr=>tr.onclick=()=>detail(tr.dataset.c))}
+function detail(c){const r=D.rows.find(x=>x.code===c),el=document.getElementById("det");el.style.display="block";
+const b=Object.entries(r.basis).map(([k,x])=>`<tr><td>${DN[x.dim]}</td><td>${x.label}</td><td>${M(x.v)}</td><td>${x.s==null?'—':x.s}</td></tr>`).join("");
+el.innerHTML=`<h3>${r.name} ${r.code} · ${r.ind} · 总分 ${r.total} · <span class="${LV[r.level]}">${r.level}</span> · 估值层 ${r.vtier}</h3>
+<div class="mute">价格 ${r.price} ${r.currency}（估值日 ${r.val_date}）｜财报口径：年报 ${r.fin_period}，最新已披露 ${r.latest_period}，财报币种 ${r.fin_currency}｜估值历史：${r.hist_note}</div>
+<p><b>排雷</b>：${r.red.length?'<span class="L4">'+r.red.join("；")+'</span>':'未触发红线'}｜红线a中“${r.red_a_unchecked.join("、")}”未能自动核查，需人工确认｜预警：${r.warn.join("；")||"无"}</p>
+<p><b>七维</b>：${Object.keys(DN).map(k=>DN[k]+" "+(r.dims[k]==null?"缺失":r.dims[k])).join("｜")}${r.missing_dims.length?"（缺失维度不计入加权）":""}</p>
+<p><b>压力测试</b>：股息下调30%后股息率 ${M(r.stress_yield)}%；利润下滑20%后分红覆盖率 ${r.stress_cover==null?M(null):r.stress_cover+"倍"}（0.8×EPS/每股分红）</p>
+<p><b>近5个财年分红</b>（${r.mkt==="hk"?"港币，EPS为财报币种":"人民币，含税"}）：${r.div_hist.map(h=>`${h.year}：每股 ${M(h.dps)}（EPS ${M(h.eps)}）`).join("｜")||"缺失"}</p>
+<div class="wrap"><table class="pt"><thead><tr><th>维度</th><th>指标（依据数据）</th><th>数值</th><th>档分</th></tr></thead><tbody>${b}</tbody></table></div>`;el.scrollIntoView({behavior:"smooth"})}
+fetch("data/latest.json",{cache:"no-store"}).then(r=>r.json()).then(d=>{D=d;const C=d.config;
+document.getElementById("meta").textContent=`行情日期 ${d.data_date} · 更新于 ${d.updated_at}（北京时间） · 财务数据更新于 ${d.fin_updated_at} · 10年国债 ${d.cn10y.yield}%（${d.cn10y.date}） · 股票池 ${d.rows.length} 只 · 数据源 腾讯行情/东方财富数据中心`;
+const P=d.portfolio;document.getElementById("port").innerHTML=`<h3>「${P.name}」组合（无红线、过初筛，按总分取前5，等权；银行≤${C.portfolio.max_banks}只且权重封顶${C.portfolio.bank_weight_cap}%）</h3>
+<div class="wrap"><table class="pt"><thead><tr><th>名称</th><th>权重</th><th>总分</th><th>估值层</th><th>入选理由</th><th>主要风险</th></tr></thead><tbody>${P.items.map(i=>`<tr><td>${i.name} ${i.code}<br><span class="mute">${i.ind}</span></td><td>${i.weight}%</td><td>${i.total}</td><td>${i.vtier}</td><td>${i.reason}</td><td>${i.risk.join("；")}</td></tr>`).join("")}</tbody></table></div>
+<p class="mute">行业分布：${Object.entries(P.industry).map(([k,v])=>`${k} <span class="bar" style="width:${v*1.5}px"></span> ${v}%`).join("　")}</p>`;
+const inds=[...new Set(d.rows.map(r=>r.ind))];document.getElementById("fi").innerHTML='<option value="">全部行业</option>'+inds.map(i=>`<option>${i}</option>`).join("");
+document.getElementById("fl").innerHTML='<option value="">全部分层</option>'+Object.keys(LV).map(i=>`<option>${i}</option>`).join("");
+document.getElementById("fi").onchange=document.getElementById("fl").onchange=render;
+const W=C.weights,mt=Object.values(C.metrics);
+document.getElementById("method").innerHTML=`<h3 style="color:var(--fg)">方法说明（默认参数，待鹅哥确认）</h3>
+<p><b>1 初筛</b>：近12个月普通股息率 ≥ ${C.screen.min_ttm_yield}%（按除息日统计，剔除特别分红；A股用人民币A股价，H股用港币H股价，分开计）。</p>
+<p><b>2 三大红线（一票否决）</b>：a 财务与治理失信——自动查名称含ST；审计意见非标准、大股东资金占用、立案调查暂无免费接口，<b>未自动核查</b>，需人工确认。b 分红不可持续（仅非金融）——近3个财年累计（经营现金流−购建长期资产支出）＜ 累计分红，且净负债率上升并为正。c 核心竞争力受损——仅人工标记（config.json → manual_flags）。单年经营现金流低于净利润、某年股息削减只算预警。银行、保险不套用现金流红线。</p>
+<p><b>3 七维打分</b>：每个指标按4个分界点映射为 0/25/50/75/100 五档，维度分＝指标档分均值再取最近一档；总分＝可用维度加权平均（缺失维度不计入，缺失权重>20%或估值分位/股息率缺失记“数据不足”，不进重点池）。</p>
+<table class="pt"><tr><th>维度</th><th>权重</th></tr>${Object.keys(DN).map(k=>`<tr><td>${DN[k]}</td><td>${W[k]}%</td></tr>`).join("")}</table>
+<p><b>指标与分界</b>（dir=1越大越好，−1越小越好）：${mt.map(m=>`${m.label}[${m.cut.join("/")}]${m.types?"（"+m.types.join("/").replace("general","非金融").replace("bank","银行").replace("insurance","保险")+"）":""}`).join("；")}。</p>
+<p><b>4 行业口径</b>：非金融看扣非ROE（港股为平均ROE）、ROIC 5年均值与稳定性、FCF=经营现金流−购建长期资产、净负债率、利息保障倍数；银行看不良率、拨备覆盖率、核心一级资本充足率、ROE；保险看综合偿付能力充足率、ROE（内含价值仅作展示，取不到标“缺失”）；周期股另算正常化PE＝现价/近5年平均EPS。</p>
+<p><b>5 护城河</b>为<b>代理指标，需人工复核</b>（毛利率、ROE 5年标准差）。<b>估值</b>为<b>简化估值，非估值区间</b>（PE/PB 5年分位、股息率−10年国债息差、正常化PE）。A股分位用东方财富日度估值（5日采样），港股用季度报告期PE/PB采样。</p>
+<p><b>6 分层</b>：总分≥${C.tiers.focus} 重点研究，${C.tiers.watch}–${C.tiers.focus-1} 观察，<${C.tiers.watch} 暂缓。估值层：A＝质量过关（无红线且盈利质量、现金偿债均≥${C.valuation_tier.quality_pass_min}）且PE/PB平均分位<${C.valuation_tier.A_below}%；B＝质量过关且分位${C.valuation_tier.A_below}–${C.valuation_tier.B_below}%；C＝分位>${C.valuation_tier.B_below}%、质量未过关或数据不足。</p>
+<p><b>7 压力测试</b>：股息下调30%后的股息率；利润下滑20%后的分红覆盖率＝0.8×上财年EPS/上财年每股分红。</p>
+<p><b>8 银行上限</b>：银行不超过全池10%（池按80只，最多${C.bank_cap.max_banks}只），按总分保留。本期剔除：${d.bank_dropped.join("、")||"无"}。</p>
+<p><b>缺失数据项</b>：审计意见、大股东资金占用、立案调查（无免费接口，未核查）；港股股权质押比例；港股银行不良率/拨备覆盖率/核心一级资本充足率、港股保险偿付能力（东方财富港股F10未提供）；保险内含价值（部分缺失）；港股扣非ROE（以平均ROE代替）。个股缺失项在表中显示“缺失”。${d.missing_quotes.length?"行情缺失（可能已退市/私有化，已移出）："+d.missing_quotes.join("、")+"。":""}${d.fin_failed.length?"财务抓取失败："+d.fin_failed.join("、"):""}</p>
+<p><b>已知局限</b>：未做回测（回测需纳入退市股并只用当时已披露数据，本期未做）；A股3年累计分红用每股分红×当前总股本近似；港股PE/PB分位为季度采样、样本少；股票池为人工初选，有幸存者偏差；周期股标记为人工设定；数据来自免费接口，可能延迟或口径不一。</p>`;render()})
+.catch(e=>document.getElementById("meta").textContent="数据加载失败："+e);
+</script></body></html>
