@@ -96,7 +96,7 @@ document.querySelectorAll("#t th").forEach(th=>th.onclick=()=>{const k=th.datase
 document.querySelectorAll("#t tbody tr").forEach(tr=>tr.onclick=()=>detail(tr.dataset.c))}
 function detail(c){const r=D.rows.find(x=>x.code===c),el=document.getElementById("det");el.style.display="block";
 const b=Object.entries(r.basis).map(([k,x])=>`<tr><td>${DN[x.dim]}</td><td>${x.label}</td><td>${M(x.v)}</td><td>${x.s==null?'—':x.s}</td></tr>`).join("");
-el.innerHTML=`<h3>${r.name} ${r.code} · ${r.ind} · 总分 ${r.total} · <span class="${LV[r.level]}">${r.level}</span> · 估值层 ${r.vtier}</h3>
+el.innerHTML=`<h3>${r.name} ${r.code} · ${r.ind}/${r.ind_fine} · 总分 ${r.total} · <span class="${LV[r.level]}">${r.level}</span> · 估值层 ${r.vtier}</h3>
 <div class="mute">价格 ${r.price} ${r.currency}（估值日 ${r.val_date}）｜财报口径：年报 ${r.fin_period}，最新已披露 ${r.latest_period}，财报币种 ${r.fin_currency}｜估值历史：${r.hist_note}</div>
 <p><b>排雷</b>：${r.red.length?'<span class="L4">'+r.red.join("；")+'</span>':'未触发红线'}｜红线a中“${r.red_a_unchecked.join("、")}”未能自动核查，需人工确认｜预警：${r.warn.join("；")||"无"}</p>
 <div class="dimbars">${Object.keys(DN).map(k=>`<div>${DN[k]}<em>${r.dims[k]==null?'':`<i style="width:${r.dims[k]}%"></i>`}</em><span>${r.dims[k]==null?'缺失':r.dims[k]}</span></div>`).join("")}</div>
@@ -106,8 +106,8 @@ el.innerHTML=`<h3>${r.name} ${r.code} · ${r.ind} · 总分 ${r.total} · <span 
 <div class="wrap"><table class="pt"><thead><tr><th>维度</th><th>指标（依据数据）</th><th>数值</th><th>档分</th></tr></thead><tbody>${b}</tbody></table></div>`;el.scrollIntoView({behavior:"smooth"})}
 fetch("data/latest.json",{cache:"no-store"}).then(r=>r.json()).then(d=>{D=d;const C=d.config;
 document.getElementById("meta").textContent=`行情日期 ${d.data_date} · 更新于 ${d.updated_at}（北京时间） · 财务数据更新于 ${d.fin_updated_at} · 10年国债 ${d.cn10y.yield}%（${d.cn10y.date}） · 股票池 ${d.rows.length} 只 · 数据源 腾讯行情/东方财富数据中心`;
-const P=d.portfolio;document.getElementById("port").innerHTML=`<h3>「${P.name}」组合（无红线、过初筛，按总分取前5，等权；银行≤${C.portfolio.max_banks}只且权重封顶${C.portfolio.bank_weight_cap}%；单一行业权重≤${C.portfolio.industry_cap}%，即同行业只取总分最高1只，低名次同行业股跳过、顺延下一名${(P.industry_skipped||[]).length?"；本期因行业上限跳过："+P.industry_skipped.join("、"):""}）</h3>
-<div class="wrap"><table class="pt"><thead><tr><th>名称</th><th>权重</th><th>总分</th><th>估值层</th><th>入选理由</th><th>主要风险</th></tr></thead><tbody>${P.items.map(i=>`<tr><td>${i.name} ${i.code}<br><span class="mute">${i.ind}</span></td><td>${i.weight}%</td><td>${i.total}</td><td>${i.vtier}</td><td>${i.reason}</td><td>${i.risk.join("；")}</td></tr>`).join("")}</tbody></table></div>
+const P=d.portfolio;document.getElementById("port").innerHTML=`<h3>「${P.name}」组合（无红线、过初筛，按总分取前5，等权；银行≤${C.portfolio.max_banks}只且权重封顶${C.portfolio.bank_weight_cap}%；单一行业（申万一级细分，如家用电器/食品饮料/汽车）权重≤${C.portfolio.industry_cap}%，即同行业只取总分最高1只，低名次同行业股跳过、顺延下一名${(P.industry_skipped||[]).length?"；本期因行业上限跳过："+P.industry_skipped.join("、"):""}）</h3>
+<div class="wrap"><table class="pt"><thead><tr><th>名称</th><th>权重</th><th>总分</th><th>估值层</th><th>入选理由</th><th>主要风险</th></tr></thead><tbody>${P.items.map(i=>`<tr><td>${i.name} ${i.code}<br><span class="mute">${i.ind_fine}（${i.ind}）</span></td><td>${i.weight}%</td><td>${i.total}</td><td>${i.vtier}</td><td>${i.reason}</td><td>${i.risk.join("；")}</td></tr>`).join("")}</tbody></table></div>
 <div class="alloc" aria-label="行业分布">${Object.entries(P.industry).map(([k,v],i)=>`<span style="flex:${v};background:var(--acc);opacity:${[1,.6,.35,.2,.12][i]||.12}" title="${k} ${v}%"></span>`).join("")}</div>
 <div class="legend">${Object.entries(P.industry).map(([k,v],i)=>`<span><span class="dot" style="display:inline-block;width:8px;height:8px;border-radius:4px;margin-right:6px;background:var(--acc);opacity:${[1,.6,.35,.2,.12][i]||.12}"></span>${k} ${v}%</span>`).join("")}</div>`;
 const inds=[...new Set(d.rows.map(r=>r.ind))];document.getElementById("fi").innerHTML='<option value="">全部行业</option>'+inds.map(i=>`<option>${i}</option>`).join("");

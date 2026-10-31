@@ -56,6 +56,7 @@ def main():
     S, fx, bond = fin["stocks"], fin["fx"], fin["cn10y"]
     today = now_bj().date()
     pool = [dict(zip(["code", "mkt", "name", "ind", "type", "cyc"], p + [0] * (6 - len(p)))) for p in cfg["pool"]]
+    for p in pool: p["ind_fine"] = cfg.get("industry_fine", {}).get(p["code"], p["ind"])
     sym = lambda p: p["mkt"] + p["code"]
     Q = quotes([sym(p) for p in pool])
     with ThreadPoolExecutor(3) as ex:
@@ -146,7 +147,7 @@ def main():
         elif total >= cfg["tiers"]["watch"]: lvl = "观察"
         else: lvl = "暂缓"
         hist = [{"year": y, "dps": r2(dps.get(y), 4), "eps": r2(eps.get(y), 3)} for y in yrs[:5]]
-        rows.append({**{k2: p[k2] for k2 in ("code", "mkt", "ind", "type")}, "cyc": bool(p["cyc"]), "name": q["name"], "price": price, "currency": cur,
+        rows.append({**{k2: p[k2] for k2 in ("code", "mkt", "ind", "ind_fine", "type")}, "cyc": bool(p["cyc"]), "name": q["name"], "price": price, "currency": cur,
             "val_date": vdate, "fin_period": f.get("fin_period"), "latest_period": f.get("latest_period"), "fin_currency": f.get("currency"),
             "pe": r2(pe), "pb": r2(pb), "val_pct": r2(valp, 1), "hist_note": f.get("hist_note"),
             "ttm_yield": r2(x["ttm_yield"]), "stress_yield": r2(x["ttm_yield"] * 0.7 if x["ttm_yield"] is not None else None),
@@ -168,12 +169,12 @@ def main():
     ind_n, ind_skipped = {}, []
     for r in rows:
         if r["red"] or not r["screen"]: continue
-        if icap is not None and ind_n.get(r["ind"], 0) >= max(1, int(icap * pc["n"] / 100 + 1e-9)):
-            ind_skipped.append(f'{r["name"]}({r["code"]},{r["ind"]})'); continue
+        if icap is not None and ind_n.get(r["ind_fine"], 0) >= max(1, int(icap * pc["n"] / 100 + 1e-9)):
+            ind_skipped.append(f'{r["name"]}({r["code"]},{r["ind_fine"]})'); continue
         if r["type"] == "bank":
             if nb >= pc["max_banks"]: continue
             nb += 1
-        picks.append(r); ind_n[r["ind"]] = ind_n.get(r["ind"], 0) + 1
+        picks.append(r); ind_n[r["ind_fine"]] = ind_n.get(r["ind_fine"], 0) + 1
         if len(picks) == pc["n"]: break
     w = {r["code"]: 100 / len(picks) for r in picks}
     for r in picks:
@@ -186,10 +187,10 @@ def main():
         ds = sorted([(v, d) for d, v in r["dims"].items() if v is not None], reverse=True)
         reason = f'总分{r["total"]}；强项：' + "、".join(f"{names[d]}{v}" for v, d in ds[:2]) + f'；近12月股息率{r["ttm_yield"]}%'
         risk = [f"{names[d]}仅{v}分" for v, d in ds[-2:] if v <= 50] + r["warn"]
-        port.append({"code": r["code"], "name": r["name"], "ind": r["ind"], "type": r["type"], "total": r["total"], "weight": round(w[r["code"]], 2),
+        port.append({"code": r["code"], "name": r["name"], "ind": r["ind"], "ind_fine": r["ind_fine"], "type": r["type"], "total": r["total"], "weight": round(w[r["code"]], 2),
                      "vtier": r["vtier"], "reason": reason, "risk": risk or ["未发现显著短板，仍需人工复核"]})
     inds = {}
-    for p_ in port: inds[p_["ind"]] = round(inds.get(p_["ind"], 0) + p_["weight"], 2)
+    for p_ in port: inds[p_["ind_fine"]] = round(inds.get(p_["ind_fine"], 0) + p_["weight"], 2)
     out = {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "data_date": data_date, "fin_updated_at": fin["updated_at"],
            "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "bank_cap", "portfolio")},
            "dims": DIMS, "pool_candidates": len(pool), "bank_dropped": dropped, "fin_failed": fin.get("failed", []),
