@@ -142,15 +142,16 @@ def main():
     cfg = load("config.json")
     fx = fx_rates()
     old = load("data/fin.json", {}).get("stocks", {})
+    pool = load("data/candidates.json")["candidates"]
     def one(p):
-        code, mkt, name, ind, typ = p[:5]
+        code, mkt, name, typ = p["code"], p["mkt"], p["name"], p["type"]
         try:
             return code, (hk_stock(code, typ, fx) if mkt == "hk" else a_stock(code, mkt, typ)), None
         except Exception as e:
             print(f"{code} {name} 失败: {e}", file=sys.stderr)
             return code, old.get(code), str(e)
-    with ThreadPoolExecutor(4) as ex:
-        res = list(ex.map(one, cfg["pool"]))
+    with ThreadPoolExecutor(8) as ex:
+        res = list(ex.map(one, pool))
     bond = em("RPTA_WEB_TREASURYYIELD", "", cols="SOLAR_DATE,EMM00166466", size=1, sort="SOLAR_DATE")
     save("data/fin.json", {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "fx": fx,
          "cn10y": {"date": bond[0]["SOLAR_DATE"][:10], "yield": bond[0]["EMM00166466"]} if bond else None,

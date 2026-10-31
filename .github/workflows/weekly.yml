@@ -11,16 +11,17 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: 行情+打分
-        run: cd scripts && python fetch_fin.py && python build.py
+        run: cd scripts && python screen.py && python fetch_fin.py && python build.py --select
       - name: 提交
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/fin.json data/latest.json
+          git add data/candidates.json data/pool.json data/fin.json data/latest.json
           if git diff --cached --quiet; then echo "无变化"; else git commit -m "data: $(TZ=Asia/Shanghai date '+%F %H:%M') 财务" && git push; fi

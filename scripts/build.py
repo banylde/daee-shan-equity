@@ -55,8 +55,10 @@ def main():
     cfg, fin = load("config.json"), load("data/fin.json")
     S, fx, bond = fin["stocks"], fin["fx"], fin["cn10y"]
     today = now_bj().date()
-    pool = [dict(zip(["code", "mkt", "name", "ind", "type", "cyc"], p + [0] * (6 - len(p)))) for p in cfg["pool"]]
-    for p in pool: p["ind_fine"] = cfg.get("industry_fine", {}).get(p["code"], p["ind"])
+    select = "--select" in sys.argv  # 每周：对全部候选打分并取前N入池；每日：只对池内股票打分
+    cand = load("data/candidates.json"); CM = {x["code"]: x for x in cand["candidates"]}
+    codes = list(CM) if select else [c for c in load("data/pool.json")["codes"] if c in CM]
+    pool = [{**CM[c], "ind_fine": CM[c]["ind"]} for c in codes]
     sym = lambda p: p["mkt"] + p["code"]
     Q = quotes([sym(p) for p in pool])
     with ThreadPoolExecutor(3) as ex:
@@ -147,7 +149,7 @@ def main():
         elif total >= cfg["tiers"]["watch"]: lvl = "观察"
         else: lvl = "暂缓"
         hist = [{"year": y, "dps": r2(dps.get(y), 4), "eps": r2(eps.get(y), 3)} for y in yrs[:5]]
-        rows.append({**{k2: p[k2] for k2 in ("code", "mkt", "ind", "ind_fine", "type")}, "cyc": bool(p["cyc"]), "name": q["name"], "price": price, "currency": cur,
+        rows.append({**{k2: p[k2] for k2 in ("code", "mkt", "ind", "ind_fine", "type")}, "cyc": bool(p["cyc"]), "ind2": p.get("ind2"), "ind_src": p.get("ind_src"), "roic3": p.get("roic"), "name": q["name"], "price": price, "currency": cur,
             "val_date": vdate, "fin_period": f.get("fin_period"), "latest_period": f.get("latest_period"), "fin_currency": f.get("currency"),
             "pe": r2(pe), "pb": r2(pb), "val_pct": r2(valp, 1), "hist_note": f.get("hist_note"),
             "ttm_yield": r2(x["ttm_yield"]), "stress_yield": r2(x["ttm_yield"] * 0.7 if x["ttm_yield"] is not None else None),
@@ -157,11 +159,14 @@ def main():
             "quality_pass": qpass, "vtier": vtier, "level": lvl, "div_hist": hist, "pledge": f.get("pledge"), "goodwill_eq": r2(f.get("goodwill_eq"), 1),
             "ev": f.get("ev")})
     # 银行上限
-    bc = cfg["bank_cap"]; banks = sorted([r for r in rows if r["type"] == "bank"], key=lambda r: -r["total"])
+    bc = {"max_banks": cfg["screen"]["bank_pool_cap"]}; banks = sorted([r for r in rows if r["type"] == "bank"], key=lambda r: -r["total"])
     dropped = [f'{r["name"]}({r["code"]},{r["total"]})' for r in banks[bc["max_banks"]:]]
     drop_codes = {r["code"] for r in banks[bc["max_banks"]:]}
     rows = [r for r in rows if r["code"] not in drop_codes]
     rows.sort(key=lambda r: (r["level"] == "红线否决", -r["total"]))
+    if select:
+        rows = rows[:cfg["screen"]["pool_size"]]
+        save("data/pool.json", {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "codes": [r["code"] for r in rows]})
     for i, r in enumerate(rows): r["rank"] = i + 1
     # 五绝归山
     pc = cfg["portfolio"]; picks, nb = [], 0
@@ -192,7 +197,7 @@ def main():
     inds = {}
     for p_ in port: inds[p_["ind_fine"]] = round(inds.get(p_["ind_fine"], 0) + p_["weight"], 2)
     out = {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "data_date": data_date, "fin_updated_at": fin["updated_at"],
-           "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "bank_cap", "portfolio")},
+           "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "portfolio")}, "screen_stats": cand["stats"], "screen_updated_at": cand["updated_at"],
            "dims": DIMS, "pool_candidates": len(pool), "bank_dropped": dropped, "fin_failed": fin.get("failed", []),
            "missing_kline": [p["code"] for p in pool if not K.get(p["code"])], "missing_quotes": [p["code"] for p in pool if sym(p) not in Q],
            "portfolio": {"name": pc["name"], "items": port, "industry": inds, "industry_skipped": ind_skipped}, "rows": rows}
