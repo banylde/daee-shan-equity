@@ -50,16 +50,18 @@ HK_SW = [("银行", "银行"), ("保险", "非银金融"), ("证券", "非银金
 CYC = {"煤炭", "石油石化", "有色金属", "钢铁", "基础化工", "建筑材料", "房地产"}
 
 def main():
-    cfg = load("config.json"); sc = cfg["screen"]; ymin, rmin, ny = sc["min_ttm_yield"], sc["roic_min"], sc["roic_years"]
+    cfg = load("config.json"); sc = cfg["screen"]; ymin, rmin, ny, soft = sc["min_ttm_yield"], sc["roic_min"], sc["roic_years"], sc["roic_floor_each"]
     today = now_bj().date(); since = (today - dt.timedelta(days=365)).isoformat()
     st = {}
     fy = today.year - 1 if today.month >= 5 else today.year - 2
     dates = ",".join(f"'{y}-12-31'" for y in range(fy - ny + 1, fy + 1))
-    ra, amk = {}, {}
-    for x in em_all("RPT_F10_FINANCE_MAINFINADATA", f'(REPORT_TYPE="年报")(REPORT_DATE in ({dates}))', "SECUCODE,REPORT_DATE,ROIC"):
+    ra, amk, rea, org = {}, {}, {}, {}
+    for x in em_all("RPT_F10_FINANCE_MAINFINADATA", f'(REPORT_TYPE="年报")(REPORT_DATE in ({dates}))', "SECUCODE,REPORT_DATE,ROIC,ROEJQ,ORG_TYPE"):
         c, m = x["SECUCODE"].split(".")
         if m not in ("SH", "SZ", "BJ") or not c[:1].isdigit(): continue
         ra.setdefault(c, {})[x["REPORT_DATE"][:4]] = x["ROIC"]; amk[c] = m.lower()
+        rea.setdefault(c, {})[x["REPORT_DATE"][:4]] = x["ROEJQ"]
+        if x.get("ORG_TYPE") in ("银行", "保险"): org[c] = x["ORG_TYPE"]
     # 1 全A：东财数据中心近3年有年报的沪深北A股（B股除外），以腾讯行情确认有报价
     A = [c for c in amk if not c.startswith(("2", "9")) or c.startswith("92")]
     st["a_universe"] = len(A)
@@ -76,25 +78,37 @@ def main():
     hk = {c: HQ["hk" + c]["name"] for c in hk if ("hk" + c) in HQ and HQ["hk" + c]["price"] > 0 and "ST" not in HQ["hk" + c]["name"].upper()}
     st["hk_quoted_nonst"] = len(hk)
     # 3 ROIC：最近 ny 个财年
-    rh = {}
-    for x in em_all("RPT_HKF10_FN_MAININDICATOR", f'(DATE_TYPE_CODE="001")(REPORT_DATE>=\'{fy - ny}-06-30\')', "SECUCODE,REPORT_DATE,ROIC_YEARLY"):
-        rh.setdefault(x["SECURITY_CODE"] if "SECURITY_CODE" in x else x["SECUCODE"][:5], {})[x["REPORT_DATE"][:10]] = x["ROIC_YEARLY"]
+    rh, reh = {}, {}
+    for x in em_all("RPT_HKF10_FN_MAININDICATOR", f'(DATE_TYPE_CODE="001")(REPORT_DATE>=\'{fy - ny}-06-30\')', "SECUCODE,REPORT_DATE,ROIC_YEARLY,ROE_YEARLY,ORG_TYPE"):
+        hc_ = x["SECUCODE"][:5]
+        rh.setdefault(hc_, {})[x["REPORT_DATE"][:10]] = x["ROIC_YEARLY"]; reh.setdefault(hc_, {})[x["REPORT_DATE"][:10]] = x["ROE_YEARLY"]
+        if x.get("ORG_TYPE") in ("银行", "保险"): org["hk" + hc_] = x["ORG_TYPE"]
     def ok(d, latest_min):
         ks = sorted(d, reverse=True)[:ny]
         if len(ks) < ny or ks[0] < latest_min: return None, [d[k] for k in ks]
         v = [d[k] for k in ks]
-        return (all(x is not None and x > rmin for x in v)), v
-    pa, nodata_a = {}, 0
-    for x in A:
-        r, v = ok({k: w for k, w in ra.get(x["f12"], {}).items()}, str(fy))
-        if r is None or any(w is None for w in v): nodata_a += 1
-        if r: pa[x["f12"]] = {"name": x["f14"], "mkt": x["mkt"], "roic": [round(w, 2) for w in v]}
-    ph, nodata_h = {}, 0
-    for c, n in hk.items():
-        r, v = ok(rh.get(c, {}), f"{fy - 1}-06-30")
-        if r is None or any(w is None for w in v): nodata_h += 1
-        if r: ph[c] = {"name": n, "mkt": "hk", "roic": [round(w, 2) for w in v]}
-    st.update(roic_pass_a=len(pa), roic_pass_hk=len(ph), roic_nodata_a=nodata_a, roic_nodata_hk=nodata_h)
+        if any(x is None for x in v): return False, v
+        return (sum(v) / ny > rmin and all(x >= soft for x in v)), v
+    def okf(d, latest_min):  # 银行/保险独立通道：ROE 每年 > fin_roe_min
+        ks = sorted(d, reverse=True)[:ny]
+        v = [d[k] for k in ks]
+        if len(ks) < ny or ks[0] < latest_min or any(x is None for x in v): return None, v
+        return all(x > sc["fin_roe_min"] for x in v), v
+    pa, ph, nod, fin_pass, fin_univ = {}, {}, {"a": 0, "hk": 0}, {"bank": 0, "insurance": 0}, {"bank": 0, "insurance": 0}
+    def chk(key, c, name, mkt, droic, droe, lm, out):
+        ot = org.get(key)
+        if ot:  # 金融独立通道（不用ROIC）
+            t = "bank" if ot == "银行" else "insurance"; fin_univ[t] += 1
+            r, v = okf(droe, lm)
+            if r: fin_pass[t] += 1; out[c] = {"name": name, "mkt": mkt, "roic": None, "roe3": [round(w, 2) for w in v], "org": t, "flags": []}
+            return
+        r, v = ok(droic, lm)
+        if r is None or any(w is None for w in v): nod[mkt if mkt == "hk" else "a"] += 1
+        if r: out[c] = {"name": name, "mkt": mkt, "roic": [round(w, 2) for w in v], "flags": (["ROIC>%s%%待复核" % sc["roic_review_above"]] if max(v) > sc["roic_review_above"] else [])}
+    for x in A: chk(x["f12"], x["f12"], x["f14"], x["mkt"], ra.get(x["f12"], {}), rea.get(x["f12"], {}), str(fy), pa)
+    for c, n in hk.items(): chk("hk" + c, c, n, "hk", rh.get(c, {}), reh.get(c, {}), f"{fy - 1}-06-30", ph)
+    st.update(roic_pass_a=sum(1 for v in pa.values() if not v.get("org")), roic_pass_hk=sum(1 for v in ph.values() if not v.get("org")),
+              roic_nodata_a=nod["a"], roic_nodata_hk=nod["hk"], fin_universe=fin_univ, fin_roe_pass=fin_pass)
     # 4 股息率（普通分红，近365天除权）
     da = {}
     for x in em_all("RPT_SHAREBONUS_DET", f"(EX_DIVIDEND_DATE>='{since}')(ASSIGN_PROGRESS=\"实施分配\")", "SECURITY_CODE,EX_DIVIDEND_DATE,PRETAX_BONUS_RMB"):
@@ -139,9 +153,9 @@ def main():
     for x in cands:
         if not x["ind"]: x["ind"], x["ind_src"] = "未分类", "缺失（行业数据未取到）"
         t2 = x.get("ind2") or ""
-        x["type"] = "bank" if x["ind"] == "银行" else ("insurance" if "保险" in t2 else "general")
+        x["type"] = x.pop("org", None) or ("bank" if x["ind"] == "银行" else ("insurance" if "保险" in t2 else "general"))
         x["cyc"] = 1 if x["ind"] in CYC or "航运" in t2 else 0
-    st["candidates"] = len(cands)
+    st["candidates"] = len(cands); st["cand_bank"] = sum(x["type"] == "bank" for x in cands); st["cand_ins"] = sum(x["type"] == "insurance" for x in cands)
     save("data/candidates.json", {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "fiscal_year": fy, "stats": st, "candidates": cands})
     print(st)
 

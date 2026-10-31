@@ -15,7 +15,7 @@ def quotes(syms):
             if "~" not in line: continue
             k, v = line.strip().split("=", 1)
             p = v.strip('"').split("~")
-            out[k[2:]] = {"name": p[1], "price": float(p[3]), "time": p[30]}
+            out[k[2:]] = {"name": p[1], "price": float(p[3]), "time": p[30], "mcap": float(p[45]) if len(p) > 45 and p[45] else None}
     return out
 
 def kline(sym):
@@ -66,12 +66,11 @@ def main():
         V = dict(zip([p["code"] for p in pool if p["mkt"] != "hk"], ex.map(lambda p: em_val(p["code"]), [p for p in pool if p["mkt"] != "hk"])))
     M, W = cfg["metrics"], cfg["weights"]
     rows, data_date = [], None
-    for p in pool:
+    def one(p, ranks):
         c, f, q, k = p["code"], S.get(p["code"], {}), Q.get(sym(p)), K.get(p["code"]) or []
-        if not q: continue
+        if not q: return None
         price = q["price"]; hk = p["mkt"] == "hk"; cur = "HKD" if hk else "CNY"
         conv = (f.get("to_hkd") or 1) if hk else 1
-        data_date = max(data_date or "", k[-1][0] if k else "")
         yrs = f.get("years", []); dps = f.get("dps", {}); eps = f.get("eps", {})
         # 股息
         ttm = sum(e["amt"] for e in f.get("div_events", []) if not e["special"] and e["ex"]
@@ -108,15 +107,28 @@ def main():
                 peak = max(peak, v); mdd = max(mdd, 1 - v / peak)
             x["mdd_1y"] = mdd * 100
             x["amount_avg"] = mean([z[1] * z[2] * (1 if hk else 100) for z in k[-20:]]) / 1e8
-        # 打分
-        basis, dims = {}, {}
+        x["fscore"] = (f["fscore"] * 9 / f["fscore_n"]) if f.get("fscore_n", 0) >= 6 else None
+        x["nbv_rate"] = f.get("nbv_rate")
+        if ranks is None: return x
+        # 打分：先按分界点得 0/25/50/75/100 档位，再加同类候选内原始值排名分位×tie_break_max 作小数（不跨档，用于打破并列）
+        basis, dims, rk = {}, {}, {}
         for key, m in M.items():
             if m.get("types") and p["type"] not in m["types"]: continue
             if m.get("cyclical_only") and not p["cyc"]: continue
             s = tier(x.get(key), m)
-            basis[key] = {"v": r2(x.get(key)), "s": s, "label": m["label"], "dim": m["dim"]}
-            if s is not None: dims.setdefault(m["dim"], []).append(s)
-        dsc = {d: (round(mean(v) / 25) * 25 if v else None) for d, v in ((d, dims.get(d)) for d, _ in DIMS)}
+            basis[key] = {"v": r2(x.get(key)), "s": s, "pct": r2(ranks.get((c, key)), 2), "label": m["label"], "dim": m["dim"]}
+            if s is not None: dims.setdefault(m["dim"], []).append(s); rk.setdefault(m["dim"], []).append(ranks.get((c, key), 0.5))
+        # 股息削减：近3年DPS同比下降≥2次 → 分红纪律封顶25、禁入五绝
+        dcfg = cfg["dividend_cut"]
+        cuts3 = [yrs[i] for i in range(min(dcfg["years"], len(yrs) - 1)) if dps.get(yrs[i]) is not None and dps.get(yrs[i + 1]) and dps[yrs[i]] < dps[yrs[i + 1]] * 0.995]
+        cut_block = len(cuts3) >= dcfg["min_cuts"]
+        dsc = {}
+        for d, _ in DIMS:
+            v = dims.get(d)
+            if not v: dsc[d] = None; continue
+            lv = round(mean(v) / 25) * 25
+            if d == "discipline" and cut_block: lv = min(lv, dcfg["discipline_cap"])
+            dsc[d] = round(lv + cfg["tie_break_max"] * mean(rk.get(d, [0.5])), 1) if not (d == "discipline" and cut_block) else lv
         avail = [d for d, _ in DIMS if dsc[d] is not None]
         total = sum(dsc[d] * W[d] for d in avail) / sum(W[d] for d in avail) if avail else 0
         miss_w = sum(W[d] for d, _ in DIMS if dsc[d] is None)
@@ -148,32 +160,75 @@ def main():
         elif total >= cfg["tiers"]["focus"] and not insufficient: lvl = "重点研究"
         elif total >= cfg["tiers"]["watch"]: lvl = "观察"
         else: lvl = "暂缓"
+        d3 = [dps.get(y) for y in yrs[:3]]
+        min3 = min(d or 0 for d in d3) if len(d3) == 3 else None
+        # 五绝流动性门槛（不影响入池）
+        lq = cfg["liquidity_gate"]; liq = []
+        if p["mkt"] == "bj" and lq["exclude_bj"]: liq.append("北交所")
+        amt = x.get("amount_avg")
+        if amt is None or amt * 1e8 < (lq["min_turnover_hkd"] if hk else lq["min_turnover_cny"]): liq.append(f"20日均成交额{'不确定' if amt is None else round(amt, 2)}亿{'港元' if hk else '元'}<门槛")
+        mc = q.get("mcap"); mc_cny = mc * (fx["HKDCNY"] if hk else 1) if mc else None
+        if mc_cny is None or mc_cny * 1e8 < lq["min_mcap_cny"]: liq.append(f"市值{'不确定' if mc_cny is None else round(mc_cny)}亿元<门槛")
+        # 金融指标门槛（银行/保险独立通道，数据可得时才判定）
+        fg = cfg["fin_track"]; fin_fail = []
+        if p["type"] == "bank":
+            if x["npl"] is not None and x["npl"] > fg["npl_max"]: fin_fail.append(f"不良率{x['npl']}%>{fg['npl_max']}%")
+            if x["provision"] is not None and x["provision"] < fg["provision_min"]: fin_fail.append(f"拨备覆盖率{x['provision']}%<{fg['provision_min']}%")
+            if x["cet1"] is not None and x["cet1"] < fg["cet1_min"]: fin_fail.append(f"核心一级资本充足率{x['cet1']}%<{fg['cet1_min']}%")
+        if p["type"] == "insurance" and x["solvency"] is not None and x["solvency"] < fg["solvency_min"]: fin_fail.append(f"综合偿付能力{x['solvency']}%<{fg['solvency_min']}%")
+        if p["type"] in ("bank", "insurance"):
+            miss = [n for k_, n in (("npl", "不良率"), ("provision", "拨备覆盖率"), ("cet1", "核心一级资本")) if p["type"] == "bank" and x[k_] is None] + \
+                   [n for k_, n in (("solvency", "偿付能力"), ("nbv_rate", "NBV")) if p["type"] == "insurance" and x[k_] is None]
+            if miss: warn.append("金融指标缺失（不确定）：" + "、".join(miss))
+        for fl in p.get("flags") or []: warn.append(fl)
+        if cut_block: warn.append(f"近{dcfg['years']}年股息削减{len(cuts3)}次：分红纪律封顶{dcfg['discipline_cap']}、禁入五绝")
         hist = [{"year": y, "dps": r2(dps.get(y), 4), "eps": r2(eps.get(y), 3)} for y in yrs[:5]]
-        rows.append({**{k2: p[k2] for k2 in ("code", "mkt", "ind", "ind_fine", "type")}, "cyc": bool(p["cyc"]), "ind2": p.get("ind2"), "ind_src": p.get("ind_src"), "roic3": p.get("roic"), "name": q["name"], "price": price, "currency": cur,
+        return ({**{k2: p[k2] for k2 in ("code", "mkt", "ind", "ind_fine", "type")}, "cyc": bool(p["cyc"]), "ind2": p.get("ind2"), "ind_src": p.get("ind_src"), "roic3": p.get("roic"), "name": q["name"], "price": price, "currency": cur,
             "val_date": vdate, "fin_period": f.get("fin_period"), "latest_period": f.get("latest_period"), "fin_currency": f.get("currency"),
             "pe": r2(pe), "pb": r2(pb), "val_pct": r2(valp, 1), "hist_note": f.get("hist_note"),
-            "ttm_yield": r2(x["ttm_yield"]), "stress_yield": r2(x["ttm_yield"] * 0.7 if x["ttm_yield"] is not None else None),
+            "ttm_yield": r2(x["ttm_yield"]), "stress_yield": r2(min3 / price * 100 * 0.7 if min3 is not None and price else None), "stress_base_dps": r2(min3, 4),
             "stress_cover": r2(e0 * conv * 0.8 / dps[yrs[0]] if e0 and yrs and dps.get(yrs[0]) else None),
             "dims": dsc, "basis": basis, "total": round(total, 1), "insufficient": insufficient, "missing_dims": [n for d, n in DIMS if dsc[d] is None],
             "red": red, "red_a_unchecked": ["审计意见", "大股东资金占用", "立案调查"], "warn": warn, "screen": screen,
             "quality_pass": qpass, "vtier": vtier, "level": lvl, "div_hist": hist, "pledge": f.get("pledge"), "goodwill_eq": r2(f.get("goodwill_eq"), 1),
-            "ev": f.get("ev")})
+            "ev": f.get("ev"), "cut_block": cut_block, "liq_block": liq, "fin_fail": fin_fail, "mcap_cny": r2(mc_cny, 0), "amount_avg": r2(amt, 2),
+            "fscore": f.get("fscore"), "fscore_n": f.get("fscore_n"), "roe3": p.get("roe3"), "data_date_k": k[-1][0] if k else None})
+    pre = [(p, one(p, None)) for p in pool]
+    pre = [(p, x) for p, x in pre if x is not None]
+    # 连续化：每个指标在同类型（general/bank/insurance）候选中按原始值排名，0~1 分位
+    ranks = {}
+    for key, m in M.items():
+        for t in ("general", "bank", "insurance"):
+            vals = sorted(x[key] for p, x in pre if p["type"] == t and x.get(key) is not None)
+            if len(vals) < 2: continue
+            for p, x in pre:
+                if p["type"] == t and x.get(key) is not None:
+                    v = x[key]; lo = sum(1 for z in vals if z < v); eq = sum(1 for z in vals if z == v)
+                    q_ = (lo + (eq - 1) / 2) / (len(vals) - 1)
+                    ranks[(p["code"], key)] = q_ if m["dir"] == 1 else 1 - q_
+    rows = [r for r in (one(p, ranks) for p, _ in pre) if r]
+    data_date = max((r.pop("data_date_k") or "" for r in rows), default=None)
     # 银行上限
-    bc = {"max_banks": cfg["screen"]["bank_pool_cap"]}; banks = sorted([r for r in rows if r["type"] == "bank"], key=lambda r: -r["total"])
+    bc = {"max_banks": cfg["screen"]["bank_pool_cap"]}; banks = sorted([r for r in rows if r["type"] == "bank" and not r["fin_fail"]], key=lambda r: -r["total"])
     dropped = [f'{r["name"]}({r["code"]},{r["total"]})' for r in banks[bc["max_banks"]:]]
     drop_codes = {r["code"] for r in banks[bc["max_banks"]:]}
     rows = [r for r in rows if r["code"] not in drop_codes]
     rows.sort(key=lambda r: (r["level"] == "红线否决", -r["total"]))
     if select:
-        rows = rows[:cfg["screen"]["pool_size"]]
+        fin_dropped = [f'{r["name"]}({r["code"]}):' + "；".join(r["fin_fail"]) for r in rows if r["fin_fail"]]
+        rows = [r for r in rows if not r["fin_fail"]][:cfg["screen"]["pool_size"]]
         save("data/pool.json", {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "codes": [r["code"] for r in rows]})
     for i, r in enumerate(rows): r["rank"] = i + 1
     # 五绝归山
     pc = cfg["portfolio"]; picks, nb = [], 0
     icap = pc.get("industry_cap")  # 单一行业权重上限%，等权下每行业最多 floor(cap*n/100) 只（至少1只）
-    ind_n, ind_skipped = {}, []
+    ind_n, ind_skipped, blocked = {}, [], []
     for r in rows:
         if r["red"] or not r["screen"]: continue
+        why = (["近3年股息削减≥%d次" % cfg["dividend_cut"]["min_cuts"]] if r["cut_block"] else []) + r["liq_block"] + r["fin_fail"]
+        if why:
+            if len(picks) < pc["n"]: blocked.append(f'{r["name"]}({r["code"]},{r["total"]}): ' + "；".join(why))
+            continue
         if icap is not None and ind_n.get(r["ind_fine"], 0) >= max(1, int(icap * pc["n"] / 100 + 1e-9)):
             ind_skipped.append(f'{r["name"]}({r["code"]},{r["ind_fine"]})'); continue
         if r["type"] == "bank":
@@ -197,10 +252,10 @@ def main():
     inds = {}
     for p_ in port: inds[p_["ind_fine"]] = round(inds.get(p_["ind_fine"], 0) + p_["weight"], 2)
     out = {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "data_date": data_date, "fin_updated_at": fin["updated_at"],
-           "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "portfolio")}, "screen_stats": cand["stats"], "screen_updated_at": cand["updated_at"],
-           "dims": DIMS, "pool_candidates": len(pool), "bank_dropped": dropped, "fin_failed": fin.get("failed", []),
+           "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "portfolio", "tie_break_max", "dividend_cut", "liquidity_gate", "fin_track")}, "screen_stats": cand["stats"], "screen_updated_at": cand["updated_at"],
+           "dims": DIMS, "pool_candidates": len(pool), "bank_dropped": dropped, "fin_dropped": fin_dropped if select else load("data/latest.json", {}).get("fin_dropped", []), "fin_failed": fin.get("failed", []),
            "missing_kline": [p["code"] for p in pool if not K.get(p["code"])], "missing_quotes": [p["code"] for p in pool if sym(p) not in Q],
-           "portfolio": {"name": pc["name"], "items": port, "industry": inds, "industry_skipped": ind_skipped}, "rows": rows}
+           "portfolio": {"name": pc["name"], "items": port, "industry": inds, "industry_skipped": ind_skipped, "blocked": blocked}, "rows": rows}
     save("data/latest.json", out)
     print("rows", len(rows), "dropped banks", dropped)
     for r in rows[:10]: print(r["rank"], r["name"], r["total"], r["level"], r["vtier"])

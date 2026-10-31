@@ -5,7 +5,10 @@
   "roic_min": 10,
   "roic_years": 3,
   "pool_size": 100,
-  "bank_pool_cap": 10
+  "bank_pool_cap": 10,
+  "roic_floor_each": 9.5,
+  "roic_review_above": 60,
+  "fin_roe_min": 10
  },
  "weights": {
   "dividend": 10,
@@ -324,6 +327,34 @@
    ],
    "dir": 1,
    "label": "20日日均成交额(亿)"
+  },
+  "fscore": {
+   "dim": "quality",
+   "cut": [
+    4,
+    5,
+    6,
+    7
+   ],
+   "dir": 1,
+   "label": "Piotroski F分(折算9分制)",
+   "types": [
+    "general"
+   ]
+  },
+  "nbv_rate": {
+   "dim": "moat",
+   "cut": [
+    10,
+    15,
+    20,
+    25
+   ],
+   "dir": 1,
+   "label": "新业务价值率%",
+   "types": [
+    "insurance"
+   ]
   }
  },
  "manual_flags": {
@@ -337,5 +368,29 @@
   "bank_weight_cap": 10,
   "industry_cap": 25
  },
- "_pool_note": "股票池由 scripts/screen.py 每周自动生成（data/candidates.json → data/pool.json），不再手写"
+ "_pool_note": "非金融：近3财年ROIC均值>roic_min且每年≥roic_floor_each；银行/保险（东财ORG_TYPE）独立通道：近3年ROE每年>fin_roe_min，且不良率/拨备/核心一级（银行）、偿付能力（保险）在数据可得时须达fin_track门槛；股息率≥min_ttm_yield；按总分取前pool_size，银行≤bank_pool_cap",
+ "tie_break_max": 4.9,
+ "dividend_cut": {
+  "years": 3,
+  "min_cuts": 2,
+  "discipline_cap": 25
+ },
+ "liquidity_gate": {
+  "min_turnover_cny": 50000000.0,
+  "min_turnover_hkd": 30000000.0,
+  "min_mcap_cny": 10000000000.0,
+  "exclude_bj": true,
+  "_note": "仅用于五绝，不影响入池；港股市值按HKDCNY折人民币"
+ },
+ "fin_track": {
+  "npl_max": 2.0,
+  "provision_min": 150,
+  "cet1_min": 8.0,
+  "solvency_min": 150,
+  "_note": "门槛为默认参数（参照监管底线留余量），待鹅哥确认"
+ },
+ "validity": {
+  "min_days": 28,
+  "_note": "仅展示，不参与打分；快照每周记录"
+ }
 }

@@ -15,6 +15,27 @@ def sd(xs):
     xs = [x for x in xs if x is not None]
     return st.pstdev(xs) if len(xs) >= 3 else None
 
+
+def fscore(cur, prev, keys):
+    """Piotroski F-score（简化，用主要指标年报字段）。keys: roa,cfo_ps,eps,lev,cr,shares,gm,ato。返回(得分,有效项数)"""
+    g = lambda d, k: None if d is None or d.get(keys[k]) is None else float(d[keys[k]])
+    tests = [
+        (g(cur, "roa"), lambda a: a > 0),
+        (g(cur, "cfo_ps"), lambda a: a > 0),
+        ((g(cur, "roa"), g(prev, "roa")), lambda a: a[0] > a[1]),
+        ((g(cur, "cfo_ps"), g(cur, "eps")), lambda a: a[0] > a[1]),
+        ((g(cur, "lev"), g(prev, "lev")), lambda a: a[0] <= a[1]),
+        ((g(cur, "cr"), g(prev, "cr")), lambda a: a[0] > a[1]),
+        ((g(cur, "shares"), g(prev, "shares")), lambda a: a[0] <= a[1] * 1.001),
+        ((g(cur, "gm"), g(prev, "gm")), lambda a: a[0] > a[1]),
+        ((g(cur, "ato"), g(prev, "ato")), lambda a: a[0] > a[1]),
+    ]
+    sc = n = 0
+    for v, fn in tests:
+        if v is None or (isinstance(v, tuple) and None in v): continue
+        n += 1; sc += 1 if fn(v) else 0
+    return sc, n
+
 def a_stock(code, mkt, typ):
     sec = f'{code}.{mkt.upper()}'
     flt = f'(SECUCODE="{sec}")(REPORT_TYPE="年报")'
@@ -34,7 +55,9 @@ def a_stock(code, mkt, typ):
     if mi:
         m = mi[0]
         r.update(npl=f(m.get("NONPERLOAN")), provision=f(m.get("BLDKBBL")), cet1=f(m.get("HXYJBCZL")),
-                 solvency=f(m.get("SOLVENCY_AR")), ev=f(m.get("NHJZ_CURRENT_AMT")))
+                 solvency=f(m.get("SOLVENCY_AR")), ev=f(m.get("NHJZ_CURRENT_AMT")), nbv_rate=f(m.get("NBV_RATE")))
+        if typ == "general" and len(mi) >= 2:
+            r["fscore"], r["fscore_n"] = fscore(mi[0], mi[1], {"roa": "ZZCJLL", "cfo_ps": "MGJYXJJE", "eps": "EPSJB", "lev": "ZCFZL", "cr": "LD", "shares": "TOTAL_SHARE", "gm": "XSMLL", "ato": "TOAZZL"})
     # 分红
     dv = em("RPT_SHAREBONUS_DET", f'(SECURITY_CODE="{code}")', size=60, sort="REPORT_DATE")
     ev, byyear = [], {}
@@ -91,6 +114,9 @@ def hk_stock(code, typ, fx):
     r["roic"] = [f(m.get("ROIC_YEARLY")) for m in mi[:5]]
     r["gm"] = [f(m.get("GROSS_PROFIT_RATIO")) for m in mi[:5]]
     r["shares"] = f(mi[0].get("ISSUED_COMMON_SHARES")) if mi else None
+    if typ == "general" and len(mi) >= 2:
+        for m in mi[:2]: m["_ato"] = (f(m["OPERATE_INCOME"]) / f(m["TOTAL_ASSETS"])) if m.get("OPERATE_INCOME") and m.get("TOTAL_ASSETS") else None
+        r["fscore"], r["fscore_n"] = fscore(mi[0], mi[1], {"roa": "ROA", "cfo_ps": "PER_NETCASH_OPERATE", "eps": "BASIC_EPS", "lev": "DEBT_ASSET_RATIO", "cr": "CURRENT_RATIO", "shares": "ISSUED_COMMON_SHARES", "gm": "GROSS_PROFIT_RATIO", "ato": "_ato"})
     r["ocf_ni_y"] = [(f(m["PER_NETCASH_OPERATE"]) / f(m["BASIC_EPS"])) if m.get("PER_NETCASH_OPERATE") is not None and m.get("BASIC_EPS") else None for m in mi[:3]]
     if allq:
         r["eps_ttm"], r["bps"] = f(allq[0].get("EPS_TTM")), f(allq[0].get("BPS"))
