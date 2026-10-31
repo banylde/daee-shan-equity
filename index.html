@@ -5,39 +5,90 @@
 <meta name="theme-color" content="#0f1115"><link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg"><link rel="apple-touch-icon" href="icons/icon-192.png">
 <style>
-:root{--bg:#0f1115;--card:#171a21;--line:#262a33;--fg:#e6e8eb;--mute:#8a919c;--up:#f0525c;--dn:#2fbf71;--hl:#f5c451}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:12px 12px calc(12px + env(safe-area-inset-bottom))}
-h1{font-size:18px;margin:4px 0}h3{font-size:15px;margin:4px 0}.mute{color:var(--mute);font-size:12px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0}
-.warnbar{border-color:var(--hl);color:var(--hl)}
-.wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}table{border-collapse:collapse;width:100%;min-width:900px;font-variant-numeric:tabular-nums}
-th,td{padding:6px 7px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}th{position:sticky;top:0;background:#1c2029;cursor:pointer;user-select:none;font-weight:500;color:var(--mute)}
-th.s{color:var(--fg)}td:nth-child(2),th:nth-child(2){text-align:left;position:sticky;left:0;background:var(--card)}tbody tr{cursor:pointer}tbody tr:hover td{background:#1f2430}
-.L1{color:var(--hl)}.L2{color:var(--fg)}.L3,.L5{color:var(--mute)}.L4{color:var(--up)}.miss{color:var(--mute);font-size:12px}
-select{background:#222733;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 6px;margin-right:6px}
-.pt td,.pt th{white-space:normal;text-align:left}.pt{min-width:0}.tag{font-size:11px;padding:0 5px;border-radius:4px;border:1px solid var(--mute);margin-left:4px}
-.bar{display:inline-block;height:8px;background:var(--hl);border-radius:4px;vertical-align:middle}
-#det{display:none}footer{margin:16px 0;text-align:center;color:var(--hl);font-size:13px}
+/* unslop by Damir Sokolovsky (@heydamir), CC BY 4.0 — 大鹅基金看板家族样式 */
+:root{--bg:#121213;--card:#18181a;--raised:#212124;--line:rgba(237,237,237,.08);--fg:#ededed;--sec:#a1a1a6;--mute:#85858b;--up:#e5484d;--dn:#3fb37f;
+--serif:"Noto Serif CJK SC","Songti SC","STSong",serif;--sans:-apple-system,"PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;--mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;--ease:cubic-bezier(.22,1,.36,1)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+.page{max-width:1440px;margin:0 auto;padding:32px 32px calc(32px + env(safe-area-inset-bottom))}
+header.mast{display:flex;align-items:flex-start;gap:16px;padding-bottom:24px;border-bottom:1px solid var(--line);margin-bottom:24px}
+.seal{flex:none;width:44px;height:44px;border-radius:6px;background:var(--acc);color:#121213;font:500 26px/44px var(--serif);text-align:center}
+.brand{font-size:13px;color:var(--sec);line-height:20px}
+h1{font:500 28px/1.2 var(--serif);margin:0 0 4px;letter-spacing:.02em}
+h2{font-size:15px;font-weight:500;margin:0 0 12px;line-height:22px}
+h3{font-size:15px;font-weight:500;margin:0 0 8px;line-height:22px}
+.mute{color:var(--mute);font-size:12px;line-height:18px}
+#meta{font-family:var(--mono),var(--sans);font-size:12px;color:var(--mute);margin-top:8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:0 0 16px}
+.wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--card);margin:0 0 16px}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{padding:8px 12px;height:36px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
+tbody tr:last-child td{border-bottom:0}
+th{position:sticky;top:0;background:var(--raised);cursor:pointer;user-select:none;font-weight:400;font-size:12px;color:var(--mute);transition:color .15s var(--ease)}
+th:hover,th.s{color:var(--fg)}
+td{font-family:var(--mono),var(--sans);font-size:13px}
+td:nth-child(2),th:nth-child(2){text-align:left;position:sticky;left:0;z-index:1;font-family:var(--sans)}
+td:nth-child(2){background:var(--card)}th:nth-child(2){background:var(--raised)}
+.p{color:var(--up)}.n{color:var(--dn)}.in{color:var(--up)}.out{color:var(--dn)}
+.yes{color:var(--sec)}.no{color:var(--mute);opacity:.6}
+.tag{font:12px/18px var(--sans);padding:0 6px;border-radius:4px;margin-left:8px;color:var(--sec);border:1px solid var(--line);background:var(--raised)}
+select{transition:background-color .15s var(--ease),border-color .15s var(--ease)}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+footer{margin:32px 0 0;padding-top:16px;border-top:1px solid var(--line);color:var(--mute);font-size:12px;text-align:left}
+@media(max-width:640px){.page{padding:16px 16px calc(24px + env(safe-area-inset-bottom))}h1{font-size:24px}.seal{width:40px;height:40px;font-size:22px;line-height:40px}header.mast{gap:12px;padding-bottom:16px;margin-bottom:16px}.card{padding:16px}th,td{padding:8px 10px}}
+
+:root{--acc:#c8a464;--acc-ink:#d6b678}
+.tagline{font-size:13px;color:var(--sec);margin-top:4px}
+.warnbar{border-left:2px solid var(--acc);color:var(--sec);font-size:13px;padding:12px 16px;border-radius:8px}.warnbar b{color:var(--fg);font-weight:500}
+table{min-width:900px}tbody tr{cursor:pointer}tbody tr:hover td{background:var(--raised)}
+.L1{color:var(--acc-ink)}.L2{color:var(--fg)}.L3,.L5{color:var(--mute)}.L4{color:var(--up)}.miss{color:var(--mute);font-size:12px;font-family:var(--sans)}
+select{background:var(--raised);color:var(--fg);border:1px solid var(--line);border-radius:8px;height:32px;padding:0 8px;margin-right:8px;font:13px var(--sans)}
+select:hover{border-color:rgba(237,237,237,.16)}
+.filters{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:12px 16px}.filters select{margin:0}
+.pt td,.pt th{white-space:normal;text-align:left;font-family:var(--sans);height:auto}.pt{min-width:0}.pt td{font-size:13px;line-height:20px;color:var(--sec)}.pt td:first-child{color:var(--fg)}
+#port .wrap{background:transparent}
+.bar{display:inline-block;height:4px;background:var(--acc);border-radius:2px;vertical-align:middle;margin:0 4px}
+#det{display:none}#det p,#method p{color:var(--sec);font-size:13px;line-height:22px;margin:8px 0}#det b,#method b{font-weight:500;color:var(--fg)}
+#method .pt{width:auto;margin:8px 0}
+@media(max-width:640px){#port .pt{min-width:720px}#port .pt td:nth-child(5),#port .pt td:nth-child(6){min-width:200px}}
+footer .first{color:var(--sec)}
+/* v2: 估值分位条、维度热力、配置堆叠条、分层分布 — 思路参考 ghostfolio（AGPL，仅借鉴概念，未复制代码）等组合看板 */
+.vb{display:inline-block;position:relative;width:48px;height:4px;border-radius:2px;background:rgba(237,237,237,.10);margin-right:8px;vertical-align:middle}
+.vb i{position:absolute;top:-3px;width:2px;height:10px;border-radius:1px;background:var(--fg)}
+.alloc{display:flex;height:8px;border-radius:4px;overflow:hidden;gap:2px;margin:12px 0 8px}.alloc span{display:block}
+.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:12px;color:var(--sec)}
+.lvls{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto}.lvls button{font:13px var(--sans);color:var(--sec);background:transparent;border:1px solid var(--line);border-radius:8px;height:32px;padding:0 10px;cursor:pointer}
+.lvls button b{font:500 13px var(--mono);color:var(--fg);margin-left:6px}.lvls button:hover{background:var(--raised)}.lvls button.on{background:var(--raised);border-color:rgba(237,237,237,.24);color:var(--fg)}
+.dimbars{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px 24px;margin:8px 0 16px}
+.dimbars div{display:grid;grid-template-columns:64px 1fr 32px;align-items:center;gap:8px;font-size:13px;color:var(--sec)}
+.dimbars em{font-style:normal;height:4px;border-radius:2px;background:rgba(237,237,237,.10);position:relative;overflow:hidden}.dimbars em i{position:absolute;left:0;top:0;bottom:0;background:var(--acc)}
+.dimbars span{font-family:var(--mono);text-align:right;color:var(--fg)}
+@media(max-width:640px){.lvls{margin-left:0}}
 </style></head><body>
-<h1>五绝归山</h1><div>大鹅基金·山部股权投资看板</div>
-<div class="mute">红利为基 · 质量为核 · 估值为尺｜先排雷、再评质、后估值</div>
-<div class="mute" id="meta">加载中…</div>
-<div class="card warnbar">⚠ 七维权重、档位分界、初筛与分层门槛均为<b>默认参数，待鹅哥确认</b>（集中在仓库 config.json）。</div>
+<div class="page">
+<header class="mast"><div class="seal" aria-hidden="true">山</div><div><div class="brand">大鹅基金 · 山部股权投资看板</div><h1>五绝归山</h1>
+<div class="tagline">红利为基 · 质量为核 · 估值为尺｜先排雷、再评质、后估值</div>
+<div id="meta">加载中…</div></div></header>
+<div class="card warnbar">七维权重、档位分界、初筛与分层门槛均为<b>默认参数，待鹅哥确认</b>（集中在仓库 config.json）。</div>
 <div class="card" id="port"></div>
-<div class="card"><select id="fi"></select><select id="fl"></select><span class="mute" id="cnt"></span></div>
+<div class="card filters"><select id="fi"></select><select id="fl"></select><span class="mute" id="cnt"></span><div class="lvls" id="lvls"></div></div>
 <div class="wrap"><table id="t"><thead><tr></tr></thead><tbody></tbody></table></div>
 <div class="card" id="det"></div>
 <div class="card mute" id="method"></div>
-<footer>权重与门槛为待回测参数；高分不等于买入信号。<br><span class="mute">仅为个人研究工具，不构成投资建议</span></footer>
+<footer><span class="first">权重与门槛为待回测参数；高分不等于买入信号</span><br><span>仅为个人研究工具，不构成投资建议</span></footer>
+</div>
 <script>
 const DN={dividend:"股息",quality:"盈利质量",cash:"现金偿债",discipline:"分红纪律",moat:"护城河",valuation:"估值",volatility:"波动流动"};
 const COLS=[["rank","#"],["name","名称"],["code","代码"],["ind","行业"],["total","总分"],["level","分层"],["vtier","估值层"],...Object.keys(DN).map(k=>["d_"+k,DN[k]]),["ttm_yield","股息率%"],["stress_yield","股息-30%"],["stress_cover","利润-20%覆盖"],["pe","PE"],["pb","PB"],["val_pct","PE/PB分位%"],["price","现价"]];
 const LV={"重点研究":"L1","观察":"L2","暂缓":"L3","红线否决":"L4","未过初筛":"L5"};let D,key="rank",asc=true;
 const M=v=>v==null?'<span class="miss">缺失</span>':v;
 const val=(r,k)=>k.startsWith("d_")?r.dims[k.slice(2)]:r[k];
-function cell(r,k){const v=val(r,k);if(k==="level")return`<span class="${LV[v]}">${v}</span>`;if(k==="name")return r.name+(r.mkt==="hk"?'<span class="tag">H</span>':'')+(r.insufficient?'<span class="tag">数据不足</span>':'');if(k==="price")return v+" "+r.currency;if(k==="stress_cover")return v==null?M(v):v+"倍";return M(v)}
+function cell(r,k){const v=val(r,k);if(k==="level")return`<span class="${LV[v]}">${v}</span>`;if(k==="name")return r.name+(r.mkt==="hk"?'<span class="tag">H</span>':'')+(r.insufficient?'<span class="tag">数据不足</span>':'');if(k==="price")return v+" "+r.currency;if(k.startsWith("d_")&&v!=null)return`<span style="display:block;margin:-8px -12px;padding:8px 12px;background:rgba(200,164,100,${(v/100*0.22).toFixed(3)})">${v}</span>`;if(k==="val_pct"&&v!=null)return`<span class="vb" title="PE/PB 5年分位"><i style="left:calc(${Math.min(Math.max(v,0),100)}% - 1px)"></i></span>${v}`;if(k==="stress_cover")return v==null?M(v):v+"倍";return M(v)}
 function render(){const fi=document.getElementById("fi").value,fl=document.getElementById("fl").value;
 let rows=D.rows.filter(r=>(!fi||r.ind===fi)&&(!fl||r.level===fl));
 rows.sort((a,b)=>{let x=val(a,key),y=val(b,key);if(x==null)return 1;if(y==null)return -1;if(typeof x==="string")return asc?x.localeCompare(y):y.localeCompare(x);return asc?x-y:y-x});
+document.getElementById("lvls").innerHTML=Object.keys(LV).map(l=>`<button data-l="${l}" class="${fl===l?'on':''}">${l}<b>${D.rows.filter(r=>r.level===l).length}</b></button>`).join("");
+document.querySelectorAll("#lvls button").forEach(b=>b.onclick=()=>{const s=document.getElementById("fl");s.value=s.value===b.dataset.l?"":b.dataset.l;render()});
 document.getElementById("cnt").textContent=`显示 ${rows.length} / ${D.rows.length} 只 · 点击表头排序，点击行看详情`;
 document.querySelector("#t thead tr").innerHTML=COLS.map(([k,l])=>`<th data-k="${k}" class="${k===key?'s':''}">${l}${k===key?(asc?' ▲':' ▼'):''}</th>`).join("");
 document.querySelector("#t tbody").innerHTML=rows.map(r=>`<tr data-c="${r.code}">`+COLS.map(([k])=>`<td>${cell(r,k)}</td>`).join("")+"</tr>").join("");
@@ -48,6 +99,7 @@ const b=Object.entries(r.basis).map(([k,x])=>`<tr><td>${DN[x.dim]}</td><td>${x.l
 el.innerHTML=`<h3>${r.name} ${r.code} · ${r.ind} · 总分 ${r.total} · <span class="${LV[r.level]}">${r.level}</span> · 估值层 ${r.vtier}</h3>
 <div class="mute">价格 ${r.price} ${r.currency}（估值日 ${r.val_date}）｜财报口径：年报 ${r.fin_period}，最新已披露 ${r.latest_period}，财报币种 ${r.fin_currency}｜估值历史：${r.hist_note}</div>
 <p><b>排雷</b>：${r.red.length?'<span class="L4">'+r.red.join("；")+'</span>':'未触发红线'}｜红线a中“${r.red_a_unchecked.join("、")}”未能自动核查，需人工确认｜预警：${r.warn.join("；")||"无"}</p>
+<div class="dimbars">${Object.keys(DN).map(k=>`<div>${DN[k]}<em>${r.dims[k]==null?'':`<i style="width:${r.dims[k]}%"></i>`}</em><span>${r.dims[k]==null?'缺失':r.dims[k]}</span></div>`).join("")}</div>
 <p><b>七维</b>：${Object.keys(DN).map(k=>DN[k]+" "+(r.dims[k]==null?"缺失":r.dims[k])).join("｜")}${r.missing_dims.length?"（缺失维度不计入加权）":""}</p>
 <p><b>压力测试</b>：股息下调30%后股息率 ${M(r.stress_yield)}%；利润下滑20%后分红覆盖率 ${r.stress_cover==null?M(null):r.stress_cover+"倍"}（0.8×EPS/每股分红）</p>
 <p><b>近5个财年分红</b>（${r.mkt==="hk"?"港币，EPS为财报币种":"人民币，含税"}）：${r.div_hist.map(h=>`${h.year}：每股 ${M(h.dps)}（EPS ${M(h.eps)}）`).join("｜")||"缺失"}</p>
@@ -56,7 +108,8 @@ fetch("data/latest.json",{cache:"no-store"}).then(r=>r.json()).then(d=>{D=d;cons
 document.getElementById("meta").textContent=`行情日期 ${d.data_date} · 更新于 ${d.updated_at}（北京时间） · 财务数据更新于 ${d.fin_updated_at} · 10年国债 ${d.cn10y.yield}%（${d.cn10y.date}） · 股票池 ${d.rows.length} 只 · 数据源 腾讯行情/东方财富数据中心`;
 const P=d.portfolio;document.getElementById("port").innerHTML=`<h3>「${P.name}」组合（无红线、过初筛，按总分取前5，等权；银行≤${C.portfolio.max_banks}只且权重封顶${C.portfolio.bank_weight_cap}%）</h3>
 <div class="wrap"><table class="pt"><thead><tr><th>名称</th><th>权重</th><th>总分</th><th>估值层</th><th>入选理由</th><th>主要风险</th></tr></thead><tbody>${P.items.map(i=>`<tr><td>${i.name} ${i.code}<br><span class="mute">${i.ind}</span></td><td>${i.weight}%</td><td>${i.total}</td><td>${i.vtier}</td><td>${i.reason}</td><td>${i.risk.join("；")}</td></tr>`).join("")}</tbody></table></div>
-<p class="mute">行业分布：${Object.entries(P.industry).map(([k,v])=>`${k} <span class="bar" style="width:${v*1.5}px"></span> ${v}%`).join("　")}</p>`;
+<div class="alloc" aria-label="行业分布">${Object.entries(P.industry).map(([k,v],i)=>`<span style="flex:${v};background:var(--acc);opacity:${[1,.6,.35,.2,.12][i]||.12}" title="${k} ${v}%"></span>`).join("")}</div>
+<div class="legend">${Object.entries(P.industry).map(([k,v],i)=>`<span><span class="dot" style="display:inline-block;width:8px;height:8px;border-radius:4px;margin-right:6px;background:var(--acc);opacity:${[1,.6,.35,.2,.12][i]||.12}"></span>${k} ${v}%</span>`).join("")}</div>`;
 const inds=[...new Set(d.rows.map(r=>r.ind))];document.getElementById("fi").innerHTML='<option value="">全部行业</option>'+inds.map(i=>`<option>${i}</option>`).join("");
 document.getElementById("fl").innerHTML='<option value="">全部分层</option>'+Object.keys(LV).map(i=>`<option>${i}</option>`).join("");
 document.getElementById("fi").onchange=document.getElementById("fl").onchange=render;
