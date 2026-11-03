@@ -273,26 +273,79 @@ def main():
             ncons += r["ind"] in cons
             picks.append(r); ind_n[r["ind"]] = ind_n.get(r["ind"], 0) + 1
             if len(picks) == pc["n"]: break
-    w = {r["code"]: 100 / len(picks) for r in picks}
-    for r in picks:
-        if r["type"] == "bank" and w[r["code"]] > pc["bank_weight_cap"]:
-            extra = w[r["code"]] - pc["bank_weight_cap"]; w[r["code"]] = pc["bank_weight_cap"]
-            others = [o for o in picks if o["type"] != "bank"]; tot = sum(w[o["code"]] for o in others)
-            for o in others: w[o["code"]] += extra * w[o["code"]] / tot
-    names = dict(DIMS); port = []
-    for r in picks:
-        ds = sorted([(v, d) for d, v in r["dims"].items() if v is not None and d != "valuation"], reverse=True)
-        reason = f'池评分{r["total"]}；估值{r["vtier"]}层/{r["dims"].get("valuation")}分；强项：' + "、".join(f"{names[d]}{v}" for v, d in ds[:2]) + f'；近12月股息率{r["ttm_yield"]}%'
-        risk = [f"{names[d]}仅{v}分" for v, d in ds[-2:] if v <= 50] + r["warn"]
-        port.append({"code": r["code"], "name": r["name"], "ind": r["ind"], "ind_fine": r["ind_fine"], "type": r["type"], "total": r["total"], "weight": round(w[r["code"]], 2), "val_score": r["dims"].get("valuation"),
-                     "vtier": r["vtier"], "reason": reason, "risk": risk or ["未发现显著短板，仍需人工复核"]})
+    names = dict(DIMS)
+    def mkport(picks):
+        w = {r["code"]: 100 / len(picks) for r in picks} if picks else {}
+        for r in picks:
+            if r["type"] == "bank" and w[r["code"]] > pc["bank_weight_cap"]:
+                extra = w[r["code"]] - pc["bank_weight_cap"]; w[r["code"]] = pc["bank_weight_cap"]
+                others = [o for o in picks if o["type"] != "bank"]; tot = sum(w[o["code"]] for o in others)
+                for o in others: w[o["code"]] += extra * w[o["code"]] / tot
+        port = []
+        for r in picks:
+            ds = sorted([(v, d) for d, v in r["dims"].items() if v is not None and d != "valuation"], reverse=True)
+            reason = f'池评分{r["total"]}；估值{r["vtier"]}层/{r["dims"].get("valuation")}分；强项：' + "、".join(f"{names[d]}{v}" for v, d in ds[:2]) + f'；近12月股息率{r["ttm_yield"]}%'
+            risk = [f"{names[d]}仅{v}分" for v, d in ds[-2:] if v <= 50] + r["warn"]
+            port.append({"code": r["code"], "name": r["name"], "ind": r["ind"], "ind_fine": r["ind_fine"], "type": r["type"], "total": r["total"], "weight": round(w[r["code"]], 2), "val_score": r["dims"].get("valuation"),
+                         "vtier": r["vtier"], "sel": sel(r), "reason": reason, "risk": risk or ["未发现显著短板，仍需人工复核"]})
+        return port
+    # 正式名单：每周调仓一次（周最后交易日收盘数据），其间冻结；5分缓冲：挑战者选股分须高于被替换者>buffer才替换；硬规则（红线/流动性/股息削减/金融指标/行业/大消费/银行上限）优先于缓冲
+    rb = cfg["rebalance"]; buf = rb["buffer"]
+    sel_off = {"A": 300, "B": 200, "不确定": 100, "C": 0}
+    def sel(r): return round(sel_off.get(r["vtier"], 0) + max(vs(r), 0), 1)  # 选股分＝估值层基数(A300/B200/不确定100/C0)+估值分
+    def hard(r):
+        return (["红线"] if r["red"] else []) + (["未过质量初筛"] if not r["screen"] else []) + (["股息削减禁入"] if r["cut_block"] else []) + r["liq_block"] + r["fin_fail"]
+    def caps_ok(lst):
+        ci = {}
+        for r in lst: ci[r["ind"]] = ci.get(r["ind"], 0) + 1
+        return max(ci.values(), default=0) <= pc["per_industry"] and sum(r["ind"] in cons for r in lst) <= pc["consumer_max"] and sum(r["type"] == "bank" for r in lst) <= pc["max_banks"]
+    OF = load("data/official.json", {})
+    dd = dt.date.fromisoformat(data_date) if data_date else today
+    wk = lambda d: d.isocalendar()[:2]
+    week_done = dd.weekday() == 4 or wk(today) > wk(dd)
+    last_rb = OF.get("rebalance_date")
+    redo = last_rb == data_date  # 同一调仓日重跑：以上一期名单为在任者重新计算
+    due = bool(os.environ.get("FORCE_REBALANCE")) or week_done and (not last_rb or redo or wk(dd) > wk(dt.date.fromisoformat(last_rb)))
+    rowmap = {r["code"]: r for r in rows}; changes = []
+    if due:
+        inc_codes = OF.get("prev_codes", []) if redo else OF.get("codes", [])
+        kept = []
+        for c_ in inc_codes:
+            r = rowmap.get(c_)
+            if r is None: changes.append(f"{c_} 出池→移出"); continue
+            h = hard(r)
+            if h: changes.append(f'{r["name"]} 触发硬规则({"；".join(h)})→移出'); continue
+            if caps_ok(kept + [r]): kept.append(r)
+            else: changes.append(f'{r["name"]} 超行业/大消费/银行上限→移出')
+        for r in order:
+            if len(kept) >= pc["n"]: break
+            if r in kept or hard(r) or not caps_ok(kept + [r]): continue
+            kept.append(r); changes.append(f'{r["name"]} 补入空位')
+        for _ in range(20):
+            done = False
+            for c_ in order:
+                if c_ in kept or hard(c_): continue
+                for w_ in sorted(kept, key=sel):
+                    trial = [z for z in kept if z is not w_] + [c_]
+                    if sel(c_) > sel(w_) + buf and caps_ok(trial):
+                        changes.append(f'{c_["name"]}(选股分{sel(c_)}) 替换 {w_["name"]}({sel(w_)})'); kept = trial; done = True; break
+                if done: break
+            if not done: break
+        kept.sort(key=lambda r: -sel(r))
+        nxt = dd + dt.timedelta(days=(4 - dd.weekday()) % 7 or 7)
+        OF = {"rebalance_date": data_date, "next_rebalance": nxt.isoformat(), "freq": rb["freq"], "buffer": buf, "codes": [r["code"] for r in kept],
+              "prev_codes": inc_codes, "prev_rebalance_date": OF.get("prev_rebalance_date") if redo else last_rb, "changes": changes,
+              "items": mkport(kept), "computed_at": now_bj().strftime("%Y-%m-%d %H:%M")}
+        save("data/official.json", OF)
+    port = OF.get("items", [])
+    cand_port = mkport(picks)
     inds = {}
     for p_ in port: inds[p_["ind"]] = round(inds.get(p_["ind"], 0) + p_["weight"], 2)
     out = {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "data_date": data_date, "fin_updated_at": fin["updated_at"],
-           "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "portfolio", "tie_break_max", "dividend_cut", "liquidity_gate", "fin_track", "growth", "hk_val_history", "type_override")}, "screen_stats": cand["stats"], "screen_updated_at": cand["updated_at"],
+           "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "portfolio", "tie_break_max", "dividend_cut", "liquidity_gate", "fin_track", "growth", "hk_val_history", "type_override", "rebalance")}, "screen_stats": cand["stats"], "screen_updated_at": cand["updated_at"],
            "dims": DIMS, "pool_candidates": len(pool), "bank_dropped": dropped, "ah_dropped": ah_dropped if select else load("data/latest.json", {}).get("ah_dropped", []), "fin_dropped": fin_dropped if select else load("data/latest.json", {}).get("fin_dropped", []), "fin_failed": fin.get("failed", []),
            "missing_kline": [p["code"] for p in pool if not K.get(p["code"])], "missing_quotes": [p["code"] for p in pool if sym(p) not in Q],
-           "portfolio": {"name": pc["name"], "items": port, "industry": inds, "industry_skipped": ind_skipped, "blocked": blocked}, "rows": rows}
+           "portfolio": {"name": pc["name"], "items": port, "candidate_items": cand_port, "official": {k_: OF.get(k_) for k_ in ("rebalance_date", "next_rebalance", "freq", "buffer", "changes", "prev_rebalance_date")}, "industry": inds, "industry_skipped": ind_skipped, "blocked": blocked}, "rows": rows}
     save("data/latest.json", out)
     print("rows", len(rows), "dropped banks", dropped)
     for r in rows[:10]: print(r["rank"], r["name"], r["total"], r["level"], r["vtier"])
