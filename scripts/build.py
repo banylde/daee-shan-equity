@@ -1,30 +1,197 @@
 #!/usr/bin/env python3
-"""每日：腾讯行情+K线、东方财富A股当日估值，结合 data/fin.json 打分，写 data/latest.json。"""
+"""每日：腾讯行情+K线（失败时用东方财富备用）、东方财富A股当日估值，结合 data/fin.json 打分，写 data/latest.json。
+
+20日均成交额缺失只记「数据缺失」，不写入流动性否决。行情日期落后于最近A股交易日时 data_stale=true。"""
 import math, statistics as st
 from concurrent.futures import ThreadPoolExecutor
 from common import *
 
+EM_KLINE = ("https://push2his.eastmoney.com", "https://33.push2his.eastmoney.com")
+EM_QUOTE = ("https://push2.eastmoney.com", "https://33.push2.eastmoney.com")
+
 DIMS = [("dividend", "股息吸引力"), ("quality", "盈利质量"), ("cash", "现金与偿债"), ("discipline", "分红纪律"),
         ("moat", "护城河与治理"), ("valuation", "估值与安全边际"), ("volatility", "波动与流动性"), ("growth", "成长性")]
 
+def num(x):
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return None if v != v else v
+
+def parse_day(s):
+    s = (s or "").strip()
+    if len(s) >= 8 and s[:8].isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+    if len(s) >= 10 and s[4] in "-/":
+        return s[:10].replace("/", "-")
+    return None
+
+def secid(sym):
+    m, c = sym[:2], sym[2:]
+    return {"hk": "116.", "sh": "1."}.get(m, "0.") + c
+
+def sym_from_em(code, market):
+    if market == 116: return "hk" + code
+    if market == 1: return "sh" + code
+    if str(code).startswith(("4", "8", "92")): return "bj" + code
+    return "sz" + code
+
 def quotes(syms):
+    """主源腾讯行情；缺失或主源失败时用东方财富备用。返回 (dict, 走了备用的代码)。"""
     out = {}
     for i in range(0, len(syms), 40):
-        t = get("https://qt.gtimg.cn/q=" + ",".join(syms[i:i + 40]), "gbk")
+        chunk = syms[i:i + 40]
+        try:
+            t = get("https://qt.gtimg.cn/q=" + ",".join(chunk), "gbk")
+        except Exception as e:
+            print("行情主源失败", chunk[0], e, file=sys.stderr); continue
         for line in t.strip().split(";"):
             if "~" not in line: continue
             k, v = line.strip().split("=", 1)
             p = v.strip('"').split("~")
-            out[k[2:]] = {"name": p[1], "price": float(p[3]), "time": p[30], "mcap": float(p[45]) if len(p) > 45 and p[45] else None}
+            price = num(p[3]) if len(p) > 3 else None
+            if not price or price <= 0: continue
+            out[k[2:]] = {"name": p[1], "price": price, "time": p[30] if len(p) > 30 else "",
+                          "mcap": num(p[45]) if len(p) > 45 and p[45] else None}
+    miss = [s for s in syms if s not in out]
+    fb = []
+    if miss:
+        for s, q in em_quotes(miss).items():
+            if s not in out:
+                out[s] = q; fb.append(s)
+                print("行情改用东方财富", s, file=sys.stderr)
+    return out, fb
+
+def em_quotes(syms):
+    out = {}
+    for i in range(0, len(syms), 40):
+        chunk = syms[i:i + 40]
+        q = "fltt=2&np=1&pn=1&fields=f12,f13,f14,f2,f20,f124&secids=" + ",".join(secid(s) for s in chunk)
+        d = None
+        for host in EM_QUOTE:
+            try:
+                d = json.loads(get(host + "/api/qt/ulist.np/get?" + q, tries=3))
+                break
+            except Exception as e:
+                print("行情备用失败", host, chunk[0], e, file=sys.stderr)
+        diff = ((d or {}).get("data") or {}).get("diff") or []
+        for x in diff:
+            price = num(x.get("f2"))
+            if not price or price <= 0 or not x.get("f12"): continue
+            ts = x.get("f124")
+            try:
+                tm = dt.datetime.fromtimestamp(int(ts), BJ).strftime("%Y/%m/%d %H:%M:%S") if ts else ""
+            except (TypeError, ValueError, OSError):
+                tm = ""
+            mcap = num(x.get("f20"))
+            try: market = int(x.get("f13"))
+            except (TypeError, ValueError): market = x.get("f13")
+            out[sym_from_em(str(x["f12"]), market)] = {
+                "name": x.get("f14") or "", "price": price, "time": tm,
+                "mcap": None if mcap is None else mcap / 1e8}
     return out
 
-def kline(sym):
-    try:
-        d = json.loads(get(f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sym},day,,,260,qfq", tries=6))["data"][sym]
-    except Exception as e:
-        print("K线失败", sym, e, file=sys.stderr); return []
+def tencent_kline(sym):
+    d = json.loads(get(f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sym},day,,,260,qfq", tries=6))["data"][sym]
     k = d.get("qfqday") or d.get("day") or []
-    return [(x[0], float(x[2]), float(x[5])) for x in k]
+    out = []
+    for x in k:
+        try:
+            if len(x) < 6: continue
+            out.append((x[0], float(x[2]), float(x[5]), None))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+def em_kline(sym):
+    """东方财富日K。元组第4项为成交额（元/港元），不用收盘×成交量近似。"""
+    sid = secid(sym)
+    last = None
+    for host in EM_KLINE:
+        url = (host + "/api/qt/stock/kline/get?secid=" + sid
+               + "&klt=101&fqt=1&lmt=260&end=20500101&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57")
+        try:
+            d = json.loads(get(url, tries=3)).get("data") or {}
+        except Exception as e:
+            last = e; continue
+        out = []
+        for line in d.get("klines") or []:
+            p = line.split(",")
+            if len(p) < 7: continue
+            close, vol, amt = num(p[2]), num(p[5]), num(p[6])
+            if close is None: continue
+            out.append((p[0], close, vol, amt))
+        if out: return out
+    if last: raise last
+    return []
+
+def kline_usable(rows):
+    if len(rows) < 20: return False
+    for z in rows[-20:]:
+        vol = z[2] or 0
+        amt = z[3] if len(z) > 3 and z[3] else 0
+        if vol > 0 or amt > 0: return True
+    return False
+
+def kline(sym):
+    """主源腾讯前复权K线；没有可用成交量时改用东方财富成交额。返回 (bars, source)。"""
+    rows = []
+    try:
+        rows = tencent_kline(sym)
+    except Exception as e:
+        print("K线失败", sym, e, file=sys.stderr)
+    if kline_usable(rows):
+        return rows, "tencent"
+    alt = []
+    try:
+        alt = em_kline(sym)
+    except Exception as e:
+        print("K线备用失败", sym, e, file=sys.stderr)
+    if kline_usable(alt):
+        print("K线改用东方财富", sym, file=sys.stderr)
+        return alt, "eastmoney"
+    return rows, ("tencent" if rows else "none")
+
+def latest_ashare_day():
+    """最近A股交易日：上证指数主源腾讯，失败再用东方财富日K。取不到则 (None, None)，不编造。"""
+    try:
+        t = get("https://qt.gtimg.cn/q=sh000001", "gbk", tries=3)
+        p = t.split("~")
+        day = parse_day(p[30] if len(p) > 30 else "")
+        if day: return day, "tencent"
+    except Exception as e:
+        print("指数日期主源失败", e, file=sys.stderr)
+    try:
+        rows = em_kline("sh000001")
+        if rows and rows[-1][0]: return rows[-1][0], "eastmoney"
+    except Exception as e:
+        print("指数日期备用失败", e, file=sys.stderr)
+    return None, None
+
+def stale_flag(data_date, ashare_day, refresh_failed=False):
+    if ashare_day and (not data_date or data_date < ashare_day):
+        return True, f"行情日期{data_date or '—'}落后于最近A股交易日{ashare_day}"
+    if refresh_failed and not ashare_day:
+        return True, "未能确认最近A股交易日，且本次行情刷新失败，沿用上次结果"
+    return False, ""
+
+def day_amt(z, hk):
+    if len(z) > 3 and z[3] is not None:
+        return z[3]
+    if z[1] is None or z[2] is None:
+        return None
+    return z[1] * z[2] * (1 if hk else 100)
+
+def turnover_block(amt, hk, lq):
+    """成交额缺失绝不否决。返回 (liq_block条目, 缺失标记)。标记只有「数据缺失」或 None。"""
+    if amt is None:
+        return [], "数据缺失"
+    unit = "港元" if hk else "元"
+    thr = lq["min_turnover_hkd"] if hk else lq["min_turnover_cny"]
+    if amt * 1e8 < thr:
+        return [f"20日均成交额{round(amt, 2)}亿{unit}<门槛"], None
+    return [], None
 
 def em_val(code):
     v = em("RPT_VALUEANALYSIS_DET", f'(SECURITY_CODE="{code}")', cols="TRADE_DATE,PE_TTM,PB_MRQ", size=1, sort="TRADE_DATE")
@@ -51,6 +218,41 @@ def tier(v, m):
 def r2(x, n=2):
     return None if x is None else round(x, n)
 
+def record_rebalance(date, prev_codes, prev_items, items, changes):
+    """把一次正式调仓追加进 data/history.json。同一调仓日重跑则覆盖该日，不另起一条。"""
+    hist = load("data/history.json") or {"events": []}
+    events = [e for e in (hist.get("events") or []) if e.get("date") != date]
+    nm = {i["code"]: i["name"] for i in (prev_items or [])}
+    nm.update({i["code"]: i["name"] for i in items})
+    cur = [i["code"] for i in items]
+    prev = list(prev_codes or [])
+    events.append({
+        "date": date,
+        "in": [{"code": c, "name": nm.get(c, c)} for c in cur if c not in prev],
+        "out": [{"code": c, "name": nm.get(c, c)} for c in prev if c not in cur],
+        "weights": [{"code": i["code"], "name": i["name"], "weight": i["weight"]} for i in items],
+        "changes": changes,
+        "reason": "；".join(changes),
+    })
+    events.sort(key=lambda e: e.get("date") or "")
+    save("data/history.json", {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "events": events})
+
+def mark_stale_reuse(ashare_day, reason):
+    """主源和备用都拿不到行情时，保留上次真实结果并打上过期标记，不编造报价。"""
+    prev = load("data/latest.json") or {}
+    stale, why = stale_flag(prev.get("data_date"), ashare_day, refresh_failed=True)
+    if not prev:
+        prev = {"rows": [], "portfolio": {"name": "五绝归山", "items": []}}
+    prev["data_stale"] = stale
+    prev["data_stale_reason"] = why or reason
+    prev["ashare_trade_date"] = ashare_day
+    prev["updated_at"] = now_bj().strftime("%Y-%m-%d %H:%M")
+    src = prev.get("sources") or {}
+    src.update(refresh="failed", note=reason)
+    prev["sources"] = src
+    save("data/latest.json", prev)
+    print("沿用上次结果", "stale", stale, why or reason)
+
 def main():
     cfg, fin = load("config.json"), load("data/fin.json")
     S, fx, bond = fin["stocks"], fin["fx"], fin["cn10y"]
@@ -62,10 +264,16 @@ def main():
         if c_ in CM and not c_.startswith("_"): CM[c_].update({k_: v_ for k_, v_ in o_.items() if not k_.startswith("_")})
     pool = [{**CM[c], "ind_fine": CM[c]["ind"]} for c in codes]
     sym = lambda p: p["mkt"] + p["code"]
-    Q = quotes([sym(p) for p in pool])
+    Q, q_fb = quotes([sym(p) for p in pool])
+    ashare_day, ashare_src = latest_ashare_day()
+    if not Q:
+        mark_stale_reuse(ashare_day, "行情主源与备用源均失败，沿用上次结果")
+        return
     with ThreadPoolExecutor(3) as ex:
-        K = dict(zip([p["code"] for p in pool], ex.map(lambda p: kline(sym(p)), pool)))
+        kl = list(ex.map(lambda p: (p["code"],) + kline(sym(p)), pool))
         V = dict(zip([p["code"] for p in pool if p["mkt"] != "hk"], ex.map(lambda p: em_val(p["code"]), [p for p in pool if p["mkt"] != "hk"])))
+    K = {c: rows for c, rows, _src in kl}
+    k_fb = [c for c, _rows, src in kl if src == "eastmoney"]
     M, W = cfg["metrics"], cfg["weights"]
     rows, data_date = [], None
     def one(p, ranks):
@@ -104,6 +312,9 @@ def main():
         e5 = [eps.get(y) for y in yrs[:5] if eps.get(y) is not None]
         x["norm_pe"] = price / (mean(e5) * conv) if p["cyc"] and len(e5) >= 3 and mean(e5) > 0 else None
         cl = [z[1] for z in k]
+        amts = [day_amt(z, hk) for z in k[-20:]] if len(k) >= 20 else []
+        if len(amts) >= 20 and all(a is not None for a in amts):
+            x["amount_avg"] = mean(amts) / 1e8
         if len(cl) > 200:
             rets = [math.log(cl[i] / cl[i - 1]) for i in range(len(cl) - 243, len(cl))]
             x["vol_1y"] = st.pstdev(rets) * math.sqrt(244) * 100
@@ -111,7 +322,6 @@ def main():
             for v in cl[-244:]:
                 peak = max(peak, v); mdd = max(mdd, 1 - v / peak)
             x["mdd_1y"] = mdd * 100
-            x["amount_avg"] = mean([z[1] * z[2] * (1 if hk else 100) for z in k[-20:]]) / 1e8
         x["fscore"] = (f["fscore"] * 9 / f["fscore_n"]) if f.get("fscore_n", 0) >= 6 else None
         x["nbv_rate"] = f.get("nbv_rate")
         # 成长性：3年复合增速（最新财年 vs 3年前）；基期≤0或缺失→None
@@ -184,7 +394,10 @@ def main():
         lq = cfg["liquidity_gate"]; liq = []
         if p["mkt"] == "bj" and lq["exclude_bj"]: liq.append("北交所")
         amt = x.get("amount_avg")
-        if amt is None or amt * 1e8 < (lq["min_turnover_hkd"] if hk else lq["min_turnover_cny"]): liq.append(f"20日均成交额{'不确定' if amt is None else round(amt, 2)}亿{'港元' if hk else '元'}<门槛")
+        # 成交额缺失只标「数据缺失」，绝不写入 liq_block（缺失不得触发移出）
+        tmsgs, tnote = turnover_block(amt, hk, lq)
+        liq.extend(tmsgs)
+        if tnote: warn.append("20日均成交额" + tnote)
         mc = q.get("mcap"); mc_cny = mc * (fx["HKDCNY"] if hk else 1) if mc else None
         if mc_cny is None or mc_cny * 1e8 < lq["min_mcap_cny"]: liq.append(f"市值{'不确定' if mc_cny is None else round(mc_cny)}亿元<门槛")
         # 金融指标门槛（银行/保险独立通道，数据可得时才判定）
@@ -209,7 +422,7 @@ def main():
             "dims": dsc, "basis": basis, "total": round(total, 1), "insufficient": insufficient, "missing_dims": [n for d, n in DIMS if dsc[d] is None],
             "red": red, "red_a_unchecked": ["审计意见", "大股东资金占用", "立案调查"], "warn": warn, "screen": screen,
             "quality_pass": qpass, "vtier": vtier, "level": lvl, "div_hist": hist, "pledge": f.get("pledge"), "goodwill_eq": r2(f.get("goodwill_eq"), 1),
-            "ev": f.get("ev"), "cut_block": cut_block, "liq_block": liq, "fin_fail": fin_fail, "mcap_cny": r2(mc_cny, 0), "amount_avg": r2(amt, 2),
+            "ev": f.get("ev"), "cut_block": cut_block, "liq_block": liq, "turnover_note": tnote, "fin_fail": fin_fail, "mcap_cny": r2(mc_cny, 0), "amount_avg": r2(amt, 2),
             "fscore": f.get("fscore"), "fscore_n": f.get("fscore_n"), "roe3": p.get("roe3"), "data_date_k": k[-1][0] if k else None})
     pre = [(p, one(p, None)) for p in pool]
     pre = [(p, x) for p, x in pre if x is not None]
@@ -308,6 +521,7 @@ def main():
     due = bool(os.environ.get("FORCE_REBALANCE")) or week_done and (not last_rb or redo or wk(dd) > wk(dt.date.fromisoformat(last_rb)))
     rowmap = {r["code"]: r for r in rows}; changes = []
     if due:
+        prev_items = OF.get("items") or []
         inc_codes = OF.get("prev_codes", []) if redo else OF.get("codes", [])
         kept = []
         for c_ in inc_codes:
@@ -333,21 +547,28 @@ def main():
             if not done: break
         kept.sort(key=lambda r: -sel(r))
         nxt = dd + dt.timedelta(days=(4 - dd.weekday()) % 7 or 7)
+        items = mkport(kept)
         OF = {"rebalance_date": data_date, "next_rebalance": nxt.isoformat(), "freq": rb["freq"], "buffer": buf, "codes": [r["code"] for r in kept],
               "prev_codes": inc_codes, "prev_rebalance_date": OF.get("prev_rebalance_date") if redo else last_rb, "changes": changes,
-              "items": mkport(kept), "computed_at": now_bj().strftime("%Y-%m-%d %H:%M")}
+              "items": items, "computed_at": now_bj().strftime("%Y-%m-%d %H:%M")}
         save("data/official.json", OF)
+        record_rebalance(data_date, inc_codes, prev_items, items, changes)
     port = OF.get("items", [])
     cand_port = mkport(picks)
     inds = {}
     for p_ in port: inds[p_["ind"]] = round(inds.get(p_["ind"], 0) + p_["weight"], 2)
-    out = {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "data_date": data_date, "fin_updated_at": fin["updated_at"],
+    stale, stale_why = stale_flag(data_date, ashare_day, False)
+    out = {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "data_date": data_date, "data_stale": stale, "data_stale_reason": stale_why, "ashare_trade_date": ashare_day,
+           "sources": {"quote_primary": "tencent qt.gtimg.cn", "quote_backup": "eastmoney push2 ulist",
+                       "kline_primary": "tencent web.ifzq.gtimg.cn qfqday", "kline_backup": "eastmoney push2his daily amount",
+                       "quote_fallback": q_fb, "kline_fallback": k_fb, "ashare_day_source": ashare_src},
+           "fin_updated_at": fin["updated_at"],
            "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "portfolio", "tie_break_max", "dividend_cut", "liquidity_gate", "fin_track", "growth", "hk_val_history", "type_override", "rebalance")}, "screen_stats": cand["stats"], "screen_updated_at": cand["updated_at"],
            "dims": DIMS, "pool_candidates": len(pool), "bank_dropped": dropped, "ah_dropped": ah_dropped if select else load("data/latest.json", {}).get("ah_dropped", []), "fin_dropped": fin_dropped if select else load("data/latest.json", {}).get("fin_dropped", []), "fin_failed": fin.get("failed", []),
            "missing_kline": [p["code"] for p in pool if not K.get(p["code"])], "missing_quotes": [p["code"] for p in pool if sym(p) not in Q],
            "portfolio": {"name": pc["name"], "items": port, "candidate_items": cand_port, "official": {k_: OF.get(k_) for k_ in ("rebalance_date", "next_rebalance", "freq", "buffer", "changes", "prev_rebalance_date")}, "industry": inds, "industry_skipped": ind_skipped, "blocked": blocked}, "rows": rows}
     save("data/latest.json", out)
-    print("rows", len(rows), "dropped banks", dropped)
+    print("rows", len(rows), "dropped banks", dropped, "due", due, "stale", stale, "ashare", ashare_day, "k_fb", len(k_fb), "q_fb", len(q_fb))
     for r in rows[:10]: print(r["rank"], r["name"], r["total"], r["level"], r["vtier"])
     for p_ in port: print("五绝", p_["name"], p_["weight"], p_["total"])
 
