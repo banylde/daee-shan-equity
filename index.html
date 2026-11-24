@@ -74,6 +74,7 @@ footer .first{color:var(--sec)}
 <div class="card warnbar">八维权重、档位分界、初筛与分层门槛均为<b>默认参数，待鹅哥确认</b>（集中在仓库 config.json）。</div>
 <div class="card warnbar">纸面成交：信号在信号日收盘后计算，按<b>下一交易日开盘价</b>成交（T+1 open）。本看板不模拟涨跌停无法成交。</div>
 <div class="card" id="port"></div>
+<div class="card" id="research-watch"><h3>研究观察（未入正式股票池）</h3><p class="mute">加载中…</p></div>
 <div class="card" id="hist"><h3>调仓记录</h3><p class="mute">加载中…</p></div>
 <div class="card filters"><select id="fi"></select><select id="fl"></select><span class="mute" id="cnt"></span><div class="lvls" id="lvls"></div></div>
 <div class="wrap"><table id="t"><thead><tr></tr></thead><tbody></tbody></table></div>
@@ -108,6 +109,19 @@ el.innerHTML=`<h3>${r.name} ${r.code} · ${r.ind}${r.ind2?"（"+r.ind2+"）":""}
 <p><b>压力测试</b>：股息下调30%后股息率 ${M(r.stress_yield)}%；利润下滑20%后分红覆盖率 ${r.stress_cover==null?M(null):r.stress_cover+"倍"}（0.8×EPS/每股分红）</p>
 <p><b>近5个财年分红</b>（${r.mkt==="hk"?"港币，EPS为财报币种":"人民币，含税"}）：${r.div_hist.map(h=>`${h.year}：每股 ${M(h.dps)}（EPS ${M(h.eps)}）`).join("｜")||"缺失"}</p>
 <div class="wrap"><table class="pt"><thead><tr><th>维度</th><th>指标（依据数据）</th><th>数值</th><th>档分</th></tr></thead><tbody>${b}</tbody></table></div>`;el.scrollIntoView({behavior:"smooth"})}
+fetch("data/research_watch.json",{cache:"no-store"}).then(r=>r.json()).then(w=>{
+const items=w.items||[];
+const gateOrder=["mcap_ceiling","roic_3y","ttm_yield","ipo_years"];
+const rows=items.map(it=>{
+  const g=it.gates||{};
+  const gates=gateOrder.filter(k=>g[k]).map(k=>{const x=g[k];return (x.label||k)+"："+x.result;}).join("；");
+  const risks=(it.risks||[]).map(r=>typeof r==="string"?r:(r.title||"")).filter(Boolean).join("；");
+  const q=it.quote;
+  const qt=q?`市值${q.mcap_cny_yi}亿元，收盘${q.price}元（${q.asof}收盘；${q.fetched_at}取数）`:"行情待核";
+  return `<tr><td>${it.name} ${it.code}<br><span class="mute">${[it.ind,it.ind2].filter(Boolean).join(" / ")}</span></td><td><b>${it.status}</b><br><span class="mute">${it.status_detail||""}</span></td><td>${qt}</td><td>${gates}</td><td>${risks||"—"}</td></tr>`;
+}).join("");
+document.getElementById("research-watch").innerHTML=`<h3>${w.title||"研究观察（未入正式股票池）"}</h3><p class="mute">${w.note||""} 更新于 ${w.updated_at}（北京时间）。</p>`+(items.length?`<div class="wrap"><table class="pt"><thead><tr><th>名称</th><th>状态</th><th>行情（已标注时点）</th><th>正式准入核对</th><th>有出处风险</th></tr></thead><tbody>${rows}</tbody></table></div>`:`<p class="mute">暂无研究观察记录。</p>`);
+}).catch(()=>{const e=document.getElementById("research-watch");if(e)e.innerHTML=`<h3>研究观察（未入正式股票池）</h3><p class="mute">观察名单暂未能加载，不把加载失败当成已入池或已排除。</p>`;});
 fetch("data/history.json",{cache:"no-store"}).then(r=>r.json()).then(h=>{
 const ev=(h.events||[]).slice().reverse();
 const fmt=xs=>xs&&xs.length?xs.map(x=>`${x.name||""} ${x.code}`).join("、"):"—";
@@ -129,6 +143,7 @@ const W=C.weights,mt=Object.values(C.metrics);
 document.getElementById("method").innerHTML=`<h3 style="color:var(--fg)">方法说明（默认参数，待鹅哥确认）</h3>
 <p><b>纸面成交</b>：信号在信号日收盘后计算，按下一交易日开盘价成交（T+1 open）。本看板不模拟涨跌停无法成交。</p>
 <p><b>0 股票池（每周六自动全市场筛选，${d.screen_updated_at}）</b>：范围＝全部沪深北A股（东财数据中心有年报者，${d.screen_stats.a_universe}只）＋全部港股通标的（沪/深港股通，${d.screen_stats.hk_universe}只）；剔除ST及无行情（剩A股${d.screen_stats.a_quoted_nonst}、港股${d.screen_stats.hk_quoted_nonst}）。候选条件：<b>非金融</b>近${C.screen.roic_years}个财年ROIC均值>${C.screen.roic_min}%且每年≥${C.screen.roic_floor_each}%（软边界；无ROIC数据不通过；任一年>${C.screen.roic_review_above}%标记“待复核”；通过A股${d.screen_stats.roic_pass_a}、港股${d.screen_stats.roic_pass_hk}，数据缺失/不足：A股${d.screen_stats.roic_nodata_a}、港股${d.screen_stats.roic_nodata_hk}）；<b>银行/保险独立通道</b>（按东财机构类型识别，共银行${d.screen_stats.fin_universe.bank}、保险${d.screen_stats.fin_universe.insurance}只）：近${C.screen.roic_years}年ROE每年>${C.screen.fin_roe_min}%（通过银行${d.screen_stats.fin_roe_pass.bank}、保险${d.screen_stats.fin_roe_pass.insurance}），且数据可得时不良率≤${C.fin_track.npl_max}%、拨备覆盖率≥${C.fin_track.provision_min}%、核心一级资本充足率≥${C.fin_track.cet1_min}%（银行）、综合偿付能力≥${C.fin_track.solvency_min}%（保险），缺失标“不确定”；金融股各指标只在同类内排名；本期因金融指标未达标剔除：${(d.fin_dropped||[]).join("、")||"无"}且近12月普通股息率≥${C.screen.min_ttm_yield}%（剔除特别股息；通过A股${d.screen_stats.yield_pass_a}、港股${d.screen_stats.yield_pass_hk}），共${d.screen_stats.candidates}只候选。<b>第一阶段</b>：候选全部按池评分（<b>不含估值</b>：盈利质量${C.weights.quality}、成长性${C.weights.growth}、现金与偿债${C.weights.cash}、护城河与治理${C.weights.moat}、分红纪律${C.weights.discipline}、股息${C.weights.dividend}、波动与流动性${C.weights.volatility}；80/60分层基于此分）取前${C.screen.pool_size}只入池（<b>A/H去重</b>：同一公司A股与H股只保留池评分高者，并列取成交额高者，空位由下一名递补；本期去重：${(d.ah_dropped||[]).join("、")||"无"}；人工修正：江苏金租按非银金融处理）（银行≤${C.screen.bank_pool_cap}只）；每日只对池内股票更新行情与打分。行业：A股用东方财富F10申万口径一级行业，港股用东财F10行业映射到申万一级（详情页标注来源）。</p>
+<p><b>研究观察名单</b>（与自动股票池分层中的「观察」不是同一回事）：用于尚未满足正式准入、或数据待核的研究标的，<b>不进入达标前100，也不进入五绝正式持仓</b>。2026-11-25起，研究口径<b>不再以市值上限排除</b>公司；自动筛选本来就没有市值上限。五绝流动性门槛仍为总市值≥${C.liquidity_gate.min_mcap_cny/1e8}亿元（<b>下限</b>，仅用于五绝，不影响入池），本次未取消、也未改其他准入门槛。</p>
 <p><b>1 初筛</b>：近12个月普通股息率 ≥ ${C.screen.min_ttm_yield}%（按除息日统计，剔除特别分红；A股用人民币A股价，H股用港币H股价，分开计）。</p>
 <p><b>2 三大红线（一票否决）</b>：a 财务与治理失信——自动查名称含ST；审计意见非标准、大股东资金占用、立案调查暂无免费接口，<b>未自动核查</b>，需人工确认。b 分红不可持续（仅非金融）——近3个财年累计（经营现金流−购建长期资产支出）＜ 累计分红，且净负债率上升并为正。c 核心竞争力受损——仅人工标记（config.json → manual_flags）。单年经营现金流低于净利润、某年股息削减只算预警。银行、保险不套用现金流红线。</p>
 <p><b>3 八维打分</b>（估值维度照算并单独展示，权重0，不进池评分，只用于五绝排序）：每个指标按4个分界点映射为 0/25/50/75/100 五档，维度档分＝指标档分均值再取最近一档；<b>再加 0–${C.tie_break_max} 的小数</b>＝该维度各指标原始值在同类候选（非金融/银行/保险分开）中的排名分位均值×${C.tie_break_max}，用于打破并列，不跨档（故维度分最高可到${100+C.tie_break_max}）；<b>股息削减惩罚</b>：近${C.dividend_cut.years}年每股分红同比下降≥${C.dividend_cut.min_cuts}次，分红纪律封顶${C.dividend_cut.discipline_cap}分（不加小数）且禁入五绝；盈利质量含 Piotroski F分（9项简化版：ROA、经营现金流、ROA改善、现金流>利润、资产负债率下降、流动比率上升、未增发、毛利率上升、资产周转率上升；有效项≥6项时折算9分制，仅作辅助指标、不设门槛，银行保险不适用）；<b>成长性</b>（权重${C.weights.growth}）：营收、扣非净利润（港股为归母）、每股分红的3年复合增速，各项在同类候选内连续排名计0–100分，负增长该项0分，超过${C.growth.cap_pct}%按${C.growth.cap_pct}%计不额外加分，维度分＝三项均值（不分档）；<b>估值分位</b>：A股用东财日度PE(TTM)/PB(MRQ)5年历史；港股用5年日K收盘（不复权）÷当时已披露的EPS(TTM)/BPS（报告期+90天视为可得，财报币种按现汇率折港币），5日采样，不足8个点记“不确定”不计分；总分＝可用维度加权平均（缺失维度不计入，缺失权重>20%或估值分位/股息率缺失记“数据不足”，不进重点池）。</p>
@@ -141,6 +156,6 @@ document.getElementById("method").innerHTML=`<h3 style="color:var(--fg)">方法�
 <div id="valid"></div>
 <p><b>8 银行上限</b>：银行不超过全池10%（池${C.screen.pool_size}只，最多${C.screen.bank_pool_cap}只），按总分保留。本期剔除：${d.bank_dropped.join("、")||"无"}。</p>
 <p><b>缺失数据项</b>：审计意见、大股东资金占用、立案调查（无免费接口，未核查）；港股股权质押比例；港股银行不良率/拨备覆盖率/核心一级资本充足率、港股保险偿付能力（东方财富港股F10未提供）；保险内含价值（部分缺失）；港股扣非ROE（以平均ROE代替）。个股缺失项在表中显示“缺失”。${d.missing_quotes.length?"行情缺失（可能已退市/私有化，已移出）："+d.missing_quotes.join("、")+"。":""}${d.fin_failed.length?"财务抓取失败："+d.fin_failed.join("、"):""}</p>
-<p><b>已知局限</b>：未做回测（回测需纳入退市股并只用当时已披露数据，本期未做）；A股3年累计分红用每股分红×当前总股本近似；港股PE/PB分位为季度采样、样本少；股票池按当期数据自动筛选，有幸存者偏差；周期股按申万一级（煤炭/石化/有色/钢铁/基础化工/建材/房地产）及航运二级自动标记；数据来自免费接口，可能延迟或口径不一。</p>`;render()})
+<p><b>已知局限</b>：未做回测（回测需纳入退市股并只用当时已披露数据，本期未做）；A股3年累计分红用每股分红×当前总股本近似；港股PE/PB分位为季度采样、样本少；股票池按当期数据自动筛选，有幸存者偏差；周期股按申万一级（煤炭/石化/有色/钢铁/基础化工/建材/房地产）及航运二级自动标记；数据来自免费接口，可能延迟或口径不一；研究观察名单的行情与核验时点写在名单本身，日常自动任务目前不会刷新该名单。</p>`;render()})
 .catch(e=>document.getElementById("meta").textContent="数据加载失败："+e)
 </script></body></html>
