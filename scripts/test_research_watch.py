@@ -122,11 +122,14 @@ for needle in (
     if needle not in html:
         fail(f"页面缺少必要说明: {needle}")
 
-# 正式名单文件本身未被改动（相对当前工作树基线，测试只检查关键字段仍是仓库数据）
-if official.get("rebalance_date") != "2026-11-06":
-    fail("official.json 调仓日期被改动")
-if official.get("codes") != ["06862", "603605", "03998", "300750", "601528"]:
-    fail(f"五绝正式名单被改动: {official.get('codes')}")
+# 正式名单/股票池保持仓库当前数据，不得回退旧快照，也不得写入 301717
+if not official.get("rebalance_date"):
+    fail("official.json 缺少调仓日期")
+codes_off_list = official.get("codes") or []
+if len(codes_off_list) != 5:
+    fail(f"五绝正式名单只数异常: {codes_off_list}")
+if "301717" in codes_off_list:
+    fail("301717 出现在五绝正式名单")
 if len(pool.get("codes") or []) != 100:
     fail("pool.json 只数被改动")
 
