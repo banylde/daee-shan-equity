@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """每周：全市场初筛（全A + 港股通），写 data/candidates.json。
 规则：剔除ST/无行情；近3个财年ROIC均>roic_min（所有股票统一，含银行保险；无ROIC数据视为不通过）；
-近12月普通分红股息率≥min_ttm_yield（港股剔除特别股息）。行业：A股取东方财富F10申万口径一级/二级；港股取东财F10行业并映射到申万一级（标注）。"""
+近12月普通分红股息率≥min_ttm_yield（港股剔除特别股息）。行业：A股取东方财富F10申万口径一级/二级；港股取东财F10行业并映射到申万一级（标注）。
+candidates 只收自动筛选通过的代码。config.manual_pool 里未过门槛的代码写入 pool_exceptions，不混入 candidates。"""
 import re, datetime as dt
 from concurrent.futures import ThreadPoolExecutor
 from common import *
@@ -156,7 +157,18 @@ def main():
         x["type"] = x.pop("org", None) or ("bank" if x["ind"] == "银行" else ("insurance" if "保险" in t2 else "general"))
         x["cyc"] = 1 if x["ind"] in CYC or "航运" in t2 else 0
     st["candidates"] = len(cands); st["cand_bank"] = sum(x["type"] == "bank" for x in cands); st["cand_ins"] = sum(x["type"] == "insurance" for x in cands)
-    save("data/candidates.json", {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "fiscal_year": fy, "stats": st, "candidates": cands})
+    # 人工入池例外：不因为授权就把未过股息门槛的代码 append 进 candidates。
+    auto_codes = {x["code"] for x in cands}
+    live_yield = {}
+    for e in manual_pool_entries(cfg):
+        c = str(e["code"])
+        if c in pa and aprice.get(c):
+            live_yield[c] = da.get(c, 0) / aprice[c] * 100
+        elif c in ph and (HQ.get("hk" + c) or {}).get("price"):
+            live_yield[c] = dh.get(c, 0) / HQ["hk" + c]["price"] * 100
+    published = [r for r in annotate_pool_exceptions(cfg, auto_codes, live_yield) if r["pool_exception"]]
+    st["pool_exceptions"] = len(published)
+    save("data/candidates.json", {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "fiscal_year": fy, "stats": st, "pool_exceptions": published, "candidates": cands})
     print(st)
 
 if __name__ == "__main__":

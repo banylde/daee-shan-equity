@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""每周：抓财务、分红、估值历史（东方财富数据中心），写 data/fin.json。只保存原始披露数字与简单派生，不做打分。"""
+"""每周：抓财务、分红、估值历史（东方财富数据中心），写 data/fin.json。只保存原始披露数字与简单派生，不做打分。
+自动候选之外，一并抓 config.manual_pool 里尚未自动通过的例外，供日度/周度打分使用。不把它们写回 candidates。"""
 import re, statistics as st
 from concurrent.futures import ThreadPoolExecutor
 from common import *
@@ -192,7 +193,13 @@ def main():
     cfg = load("config.json")
     fx = fx_rates()
     old = load("data/fin.json", {}).get("stocks", {})
-    pool = load("data/candidates.json")["candidates"]
+    pool = list(load("data/candidates.json")["candidates"])
+    seen = {p["code"] for p in pool}
+    for rec in annotate_pool_exceptions(cfg, seen):
+        if not rec.get("pool_exception") or rec["code"] in seen or not rec.get("mkt"):
+            continue
+        pool.append({"code": rec["code"], "name": rec.get("name"), "mkt": rec["mkt"], "type": rec.get("type") or "general"})
+        seen.add(rec["code"])
     def one(p):
         code, mkt, name, typ = p["code"], p["mkt"], p["name"], p["type"]
         try:

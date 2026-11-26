@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""验收：取消的是研究口径市值上限；五绝流动性市值下限与其他准入保持原样；
-超纯应材仅出现在研究观察名单，并标明未满足正式准入之处。不访问网络。"""
+"""验收：通用门槛未改；301717 在正式股票池、不在五绝 official；
+观察名单不再把它标成未入池；股息仍标未通过；例外能被筛选逻辑读到。不访问网络。"""
 import json, os, re, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -67,41 +67,66 @@ for rel in ("scripts/screen.py", "scripts/build.py", "scripts/fetch_fin.py"):
     if rel.endswith("build.py") and "min_mcap_cny" not in src:
         fail("build.py 丢失五绝市值下限检查")
 
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+import common
+
 pool = load("data/pool.json")
 official = load("data/official.json")
 cands = load("data/candidates.json")
 watch = load("data/research_watch.json")
-codes_pool = set(pool.get("codes") or [])
-codes_off = set(official.get("codes") or [])
+codes_pool = list(pool.get("codes") or [])
+codes_off = list(official.get("codes") or [])
 codes_cand = {x["code"] for x in cands.get("candidates") or []}
 
-if "301717" in codes_pool or "301717" in codes_off or "301717" in codes_cand:
-    fail("301717 被写入正式池/五绝/自动候选，这超出观察授权")
+if "301717" not in codes_pool:
+    fail("301717 未进入正式股票池")
+if codes_pool.count("301717") != 1:
+    fail(f"301717 在正式池中重复: {codes_pool.count('301717')}")
+non_exc = [c for c in codes_pool if c != "301717"]
+if len(non_exc) != 100 or len(set(non_exc)) != 100:
+    fail(f"自动股票池只数被改动: {len(non_exc)}")
+if "301717" in codes_cand:
+    fail("未过股息门槛的 301717 被写进自动候选 candidates")
 
-items = [x for x in watch.get("items") or [] if x.get("code") == "301717"]
-if len(items) != 1:
-    fail("研究观察名单中应有且仅有一条超纯应材记录")
-it = items[0]
+expect_off = ["603605", "06862", "03998", "601528", "300750"]
+if codes_off != expect_off:
+    fail(f"五绝正式名单被改动: {codes_off}")
+if official.get("rebalance_date") != "2026-11-20" or official.get("next_rebalance") != "2026-11-27":
+    fail(f"五绝调仓日期被改动: {official.get('rebalance_date')} {official.get('next_rebalance')}")
+if any(x.get("code") == "301717" for x in official.get("items") or []):
+    fail("301717 被写入五绝持仓明细")
+
+if any(x.get("code") == "301717" for x in watch.get("items") or []):
+    fail("观察名单仍收录 301717，或仍把它标成未入池")
+for it0 in watch.get("items") or []:
+    if it0.get("code") == "301717" and not it0.get("in_formal_pool"):
+        fail("观察名单把 301717 标成未入池")
+trans = [x for x in watch.get("transferred") or [] if x.get("code") == "301717"]
+if len(trans) != 1:
+    fail("观察档案里应留下一条已转入的超纯应材记录")
+it = trans[0]
 if it.get("name") != "超纯应材":
     fail(f"名称不符: {it.get('name')}")
-if it.get("in_formal_pool") or it.get("in_official"):
-    fail("观察记录把正式入池/五绝标成了真")
-if "不满足正式准入" not in (it.get("status") or ""):
-    fail(f"状态未标明不满足正式准入: {it.get('status')}")
+if not it.get("in_formal_pool") or it.get("in_official"):
+    fail("转入记录未标明已入正式池，或误标进了五绝")
+if "未入池" in (it.get("status") or "") or it.get("status") == "不满足正式准入":
+    fail(f"观察档案仍把状态写成未入池: {it.get('status')}")
+blob = json.dumps(watch, ensure_ascii=False)
+if "暂无" not in (watch.get("empty_note") or "") or "2026-11-26" not in blob or "正式股票池" not in (watch.get("empty_note") or ""):
+    fail("空观察名单未说明 2026-11-26 原名单已转入正式股票池")
 
 g = it["gates"]
 if g["mcap_ceiling"]["result"] != "不再适用":
     fail("市值上限仍被当作排除原因")
 if g["roic_3y"]["result"] != "通过":
     fail("三年ROIC已用东财年报字段核实通过，却未如实标记")
-if g["ttm_yield"]["result"] != "未通过":
+if g["ttm_yield"]["result"] != "未通过" or it.get("yield_gate") != "未通过":
     fail("股息门槛未过，不得写成通过或仅用数据缺失带过")
 if "未满" not in g["ipo_years"]["result"]:
     fail("上市年限未满应明确标注")
 if "不设此门槛" not in g["ipo_years"]["result"] and "不设" not in g["ipo_years"].get("note", ""):
     fail("不得把上市年限未满写成新的排除阈值")
 
-# 不得把报告二次行情写成未标注时点的最新价
 q = it["quote"]
 if q.get("asof") != "2026-11-24":
     fail(f"行情时点标注错误: {q.get('asof')}")
@@ -109,6 +134,58 @@ if q.get("mcap_cny_yi") != 252.35 or q.get("price") != 247.78:
     fail(f"交叉后的收盘价/市值与取数不符: {q}")
 if not q.get("sources"):
     fail("行情缺少来源")
+
+expect = [r for r in common.annotate_pool_exceptions(cfg, codes_cand) if r["pool_exception"]]
+if [r["code"] for r in expect] != ["301717"]:
+    fail(f"筛选逻辑没有读到 301717 例外: {expect}")
+ex = expect[0]
+if ex["auto_pass"] or not ex["pool_exception"] or ex["yield_gate"] != "未通过":
+    fail(f"例外被标成自动通过: {ex}")
+if ex.get("label") != "授权入池，股息仍未达标":
+    fail(f"例外标记不符: {ex.get('label')}")
+if ex.get("ttm_yield") != 0:
+    fail(f"例外股息率被改写成通过口径: {ex.get('ttm_yield')}")
+if cands.get("pool_exceptions") != expect:
+    fail("candidates.pool_exceptions 与筛选逻辑读到的例外不一致")
+if pool.get("exceptions") != expect:
+    fail("pool.exceptions 与筛选逻辑读到的例外不一致")
+passed = common.annotate_pool_exceptions(cfg, {"301717"}, {"301717": 2})
+if not passed or passed[0]["auto_pass"] is not True or passed[0]["pool_exception"] or passed[0]["yield_gate"] != "通过":
+    fail(f"已进入自动候选时仍被当成未通过例外: {passed}")
+forced = common.annotate_pool_exceptions(cfg, set(), {"301717": 5})
+if forced[0]["yield_gate"] != "未通过" or forced[0]["auto_pass"]:
+    fail("未进自动候选时不得把股息标成通过")
+
+auto_rows = [{"code": f"{i:06d}", "fin_fail": []} for i in range(120)]
+exc_rows = [{"code": "301717", "pool_exception": True, "fin_fail": ["金融指标未达标"]}]
+rows, merged = common.assemble_pool(auto_rows, exc_rows, common.manual_pool_entries(cfg), cfg["screen"]["pool_size"])
+if merged.count("301717") != 1 or len(merged) != 101:
+    fail(f"重筛后例外没有留在正式池: {len(merged)} {merged[-3:]}")
+if merged[:100] != [r["code"] for r in auto_rows[:100]]:
+    fail("例外占用了自动入池名额")
+already = [{"code": "301717", "fin_fail": []}] + auto_rows[:99]
+_, merged2 = common.assemble_pool(already, [], common.manual_pool_entries(cfg), 100)
+if merged2.count("301717") != 1:
+    fail(f"例外与自动入选重复: {merged2.count('301717')}")
+block = common.official_exception_block({"pool_exception": True, "screen": False, "yield_gate": "未通过", "code": "301717"})
+if not block or "股息仍未达标" not in block or "五绝" not in block:
+    fail(f"例外没有被五绝选择拦住: {block}")
+if common.official_exception_block({"code": "603605", "screen": True, "pool_exception": False}) is not None:
+    fail("普通达标股票被例外规则误伤")
+
+src_screen = text("scripts/screen.py")
+if src_screen.count("cands.append") != 2 or "annotate_pool_exceptions" not in src_screen or "pool_exceptions" not in src_screen:
+    fail("screen.py 没有把例外和自动候选分开")
+src_build = text("scripts/build.py")
+if "assemble_pool" not in src_build or "official_exception_block" not in src_build or "pool_exception" not in src_build:
+    fail("build.py 未接上例外留池和五绝拦截")
+if "annotate_pool_exceptions" not in text("scripts/fetch_fin.py"):
+    fail("周度财务任务不会更新例外标的")
+weekly, daily = text(".github/workflows/weekly.yml"), text(".github/workflows/daily.yml")
+if "research_watch" in weekly or "research_watch" in daily:
+    fail("为观察区扩展了 Actions")
+if "screen.py" not in weekly or "fetch_fin.py" not in weekly or "build.py --select" not in weekly:
+    fail("周度筛选任务被改掉")
 
 html = text("index.html")
 for needle in (
@@ -118,19 +195,14 @@ for needle in (
     "不再以市值上限排除",
     "下限",
     "与自动股票池分层中的「观察」不是同一回事",
+    'id="pool-exceptions"',
+    "data/pool.json",
+    "empty_note",
+    "授权入池，股息仍未达标",
+    "2026-11-26",
+    "manual_pool",
 ):
     if needle not in html:
         fail(f"页面缺少必要说明: {needle}")
 
-# 正式名单/股票池保持仓库当前数据，不得回退旧快照，也不得写入 301717
-if not official.get("rebalance_date"):
-    fail("official.json 缺少调仓日期")
-codes_off_list = official.get("codes") or []
-if len(codes_off_list) != 5:
-    fail(f"五绝正式名单只数异常: {codes_off_list}")
-if "301717" in codes_off_list:
-    fail("301717 出现在五绝正式名单")
-if len(pool.get("codes") or []) != 100:
-    fail("pool.json 只数被改动")
-
-print("ok", "watch", it["code"], it["status"], "official", official["codes"])
+print("ok", "pool", codes_pool[-1], ex["yield_gate"], "official", codes_off)
