@@ -24,6 +24,32 @@
 "cand_bank":22,
 "cand_ins":5
 },
+"pool_exceptions":[
+{
+"code":"301717",
+"ttm_yield":0.0,
+"name":"超纯应材",
+"mkt":"sz",
+"ind":"电子",
+"ind2":"半导体",
+"ind_src":"东财F10申万口径 BOARD_NAME_LEVEL=电子-半导体-半导体设备（2026-11-25 06:34 取数）",
+"type":"general",
+"cyc":0,
+"roic":[
+24.37,
+16.77,
+20.27
+],
+"authorized_on":"2026-11-26",
+"authorized_by":"鹅哥",
+"reason":"2026-11-26 授权将当时研究观察名单转入正式股票池",
+"note":"近12月普通股息率0%，规则仍是≥1%（config.screen.min_ttm_yield，未放宽）。这是2026-11-26鹅哥授权的命名例外：授权入池，股息仍未达标。不得记入 candidates 自动通过，不得因此进入五绝正式持仓。行情沿用研究观察名单已标注的2026-11-24收盘（247.78元，市值252.35亿元），本次不新取数；入池后由日度 build.py 与周六财务任务更新行情和打分。观察名单本身仍不由 Actions 刷新。",
+"auto_pass":false,
+"pool_exception":true,
+"yield_gate":"未通过",
+"label":"授权入池，股息仍未达标"
+}
+],
 "candidates":[
 {
 "code":"002605",

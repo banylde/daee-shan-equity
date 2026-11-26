@@ -259,10 +259,32 @@ def main():
     today = now_bj().date()
     select = "--select" in sys.argv  # 每周：对全部候选打分并取前N入池；每日：只对池内股票打分
     cand = load("data/candidates.json"); CM = {x["code"]: x for x in cand["candidates"]}
-    codes = list(CM) if select else [c for c in load("data/pool.json")["codes"] if c in CM]
     for c_, o_ in cfg.get("type_override", {}).items():  # 人工修正机构类型/行业（如江苏金租：东财标银行，实为非银金融）
         if c_ in CM and not c_.startswith("_"): CM[c_].update({k_: v_ for k_, v_ in o_.items() if not k_.startswith("_")})
-    pool = [{**CM[c], "ind_fine": CM[c]["ind"]} for c in codes]
+    manual = manual_pool_entries(cfg)
+    exc_meta = {r["code"]: r for r in annotate_pool_exceptions(cfg, set(CM)) if r["pool_exception"]}
+    def profile(code):
+        if code in CM:
+            src = CM[code]
+            return {**src, "ind_fine": src.get("ind") or "未分类", "pool_exception": False}
+        meta = exc_meta.get(code)
+        if not meta or not meta.get("mkt"):
+            return None
+        ind = meta.get("ind") or "未分类"
+        return {"code": code, "name": meta.get("name"), "mkt": meta["mkt"], "ind": ind, "ind_fine": ind,
+                "ind2": meta.get("ind2"), "ind_src": meta.get("ind_src") or "config.json manual_pool",
+                "type": meta.get("type") or "general", "cyc": meta.get("cyc") or 0, "roic": meta.get("roic"),
+                "flags": [], "pool_exception": True, "auto_pass": False, "yield_gate": "未通过"}
+    pool_codes = list((load("data/pool.json") or {}).get("codes") or [])
+    base = list(CM) if select else [c for c in pool_codes if c in CM]
+    base_set = set(base)
+    if select:
+        extra = [e["code"] for e in manual if str(e["code"]) not in base_set]
+    else:
+        in_pool = set(pool_codes)
+        extra = [e["code"] for e in manual if str(e["code"]) in in_pool and str(e["code"]) not in base_set]
+    codes = base + extra
+    pool = [p for p in (profile(c) for c in codes) if p]
     sym = lambda p: p["mkt"] + p["code"]
     Q, q_fb = quotes([sym(p) for p in pool])
     ashare_day, ashare_src = latest_ashare_day()
@@ -413,6 +435,10 @@ def main():
             if miss: warn.append("金融指标缺失（不确定）：" + "、".join(miss))
         for fl in p.get("flags") or []: warn.append(fl)
         if cut_block: warn.append(f"近{dcfg['years']}年股息削减{len(cuts3)}次：分红纪律封顶{dcfg['discipline_cap']}、禁入五绝")
+        exc_label = None
+        if p.get("pool_exception"):
+            exc_label = "授权入池，股息仍未达标" if not screen else "授权入池"
+            warn.append(exc_label)
         hist = [{"year": y, "dps": r2(dps.get(y), 4), "eps": r2(eps.get(y), 3)} for y in yrs[:5]]
         return ({**{k2: p[k2] for k2 in ("code", "mkt", "ind", "ind_fine", "type")}, "cyc": bool(p["cyc"]), "ind2": p.get("ind2"), "ind_src": p.get("ind_src"), "roic3": p.get("roic"), "name": q["name"], "price": price, "currency": cur,
             "val_date": vdate, "fin_period": f.get("fin_period"), "latest_period": f.get("latest_period"), "fin_currency": f.get("currency"),
@@ -421,26 +447,32 @@ def main():
             "stress_cover": r2(e0 * conv * 0.8 / dps[yrs[0]] if e0 and yrs and dps.get(yrs[0]) else None),
             "dims": dsc, "basis": basis, "total": round(total, 1), "insufficient": insufficient, "missing_dims": [n for d, n in DIMS if dsc[d] is None],
             "red": red, "red_a_unchecked": ["审计意见", "大股东资金占用", "立案调查"], "warn": warn, "screen": screen,
+            "pool_exception": bool(p.get("pool_exception")), "auto_pass": not bool(p.get("pool_exception")),
+            "yield_gate": "未通过" if p.get("pool_exception") and not screen else ("通过" if screen else "未通过"),
+            "exception_label": exc_label,
             "quality_pass": qpass, "vtier": vtier, "level": lvl, "div_hist": hist, "pledge": f.get("pledge"), "goodwill_eq": r2(f.get("goodwill_eq"), 1),
             "ev": f.get("ev"), "cut_block": cut_block, "liq_block": liq, "turnover_note": tnote, "fin_fail": fin_fail, "mcap_cny": r2(mc_cny, 0), "amount_avg": r2(amt, 2),
             "fscore": f.get("fscore"), "fscore_n": f.get("fscore_n"), "roe3": p.get("roe3"), "data_date_k": k[-1][0] if k else None})
     pre = [(p, one(p, None)) for p in pool]
     pre = [(p, x) for p, x in pre if x is not None]
-    # 连续化：每个指标在同类型（general/bank/insurance）候选中按原始值排名，0~1 分位
+    # 连续化：每个指标在同类型（general/bank/insurance）自动候选中按原始值排名，0~1 分位。例外不进排名分母。
+    rank_base = [(p, x) for p, x in pre if not p.get("pool_exception")]
     ranks = {}
     for key, m in M.items():
         for t in ("general", "bank", "insurance"):
             cv = (lambda v: min(v, m["cap"])) if m.get("continuous") else (lambda v: v)
-            vals = sorted(cv(x[key]) for p, x in pre if p["type"] == t and x.get(key) is not None)
+            vals = sorted(cv(x[key]) for p, x in rank_base if p["type"] == t and x.get(key) is not None)
             if len(vals) < 2: continue
-            for p, x in pre:
+            for p, x in rank_base:
                 if p["type"] == t and x.get(key) is not None:
                     v = cv(x[key]); lo = sum(1 for z in vals if z < v); eq = sum(1 for z in vals if z == v)
                     q_ = (lo + (eq - 1) / 2) / (len(vals) - 1)
                     ranks[(p["code"], key)] = q_ if m["dir"] == 1 else 1 - q_
     rows = [r for r in (one(p, ranks) for p, _ in pre) if r]
     data_date = max((r.pop("data_date_k") or "" for r in rows), default=None)
-    # 银行上限
+    exc_rows = [r for r in rows if r.get("pool_exception")]
+    rows = [r for r in rows if not r.get("pool_exception")]
+    # 银行上限（只作用于自动候选；授权例外不占名额，也不在这里被丢掉）
     bc = {"max_banks": cfg["screen"]["bank_pool_cap"]}; banks = sorted([r for r in rows if r["type"] == "bank" and not r["fin_fail"]], key=lambda r: -r["total"])
     dropped = [f'{r["name"]}({r["code"]},{r["total"]})' for r in banks[bc["max_banks"]:]]
     drop_codes = {r["code"] for r in banks[bc["max_banks"]:]}
@@ -458,8 +490,14 @@ def main():
     rows = [r for r in rows if id(r) in keep]
     if select:
         fin_dropped = [f'{r["name"]}({r["code"]}):' + "；".join(r["fin_fail"]) for r in rows if r["fin_fail"]]
-        rows = [r for r in rows if not r["fin_fail"]][:cfg["screen"]["pool_size"]]
-        save("data/pool.json", {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "codes": [r["code"] for r in rows]})
+        rows, codes_out = assemble_pool(rows, exc_rows, manual, cfg["screen"]["pool_size"])
+        published = [r for r in annotate_pool_exceptions(cfg, set(CM)) if r["pool_exception"]]
+        payload = {"updated_at": now_bj().strftime("%Y-%m-%d %H:%M"), "codes": codes_out, "exceptions": published}
+        auth_dates = [e.get("authorized_on") for e in manual if e.get("authorized_on")]
+        if auth_dates: payload["manual_pool_at"] = max(auth_dates)
+        save("data/pool.json", payload)
+    else:
+        rows = rows + [r for r in exc_rows if r["code"] not in {x["code"] for x in rows}]
     for i, r in enumerate(rows): r["rank"] = i + 1
     # 五绝归山
     pc = cfg["portfolio"]; picks, nb = [], 0
@@ -472,7 +510,9 @@ def main():
         if len(picks) >= pc["n"]: break
         for r in order:
             if r["vtier"] not in allow: continue
+            exb = official_exception_block(r)
             why = (["红线：" + "、".join(map(str, r["red"]))] if r["red"] else []) + (["未过质量初筛"] if not r["screen"] else []) + \
+                  (([exb] if exb else [])) + \
                   (["近3年股息削减≥%d次" % cfg["dividend_cut"]["min_cuts"]] if r["cut_block"] else []) + r["liq_block"] + r["fin_fail"]
             if why:
                 blocked.append(f'{r["name"]}({r["code"]},估值{r["vtier"]}/{vs(r)}): ' + "；".join(why)); continue
@@ -507,7 +547,8 @@ def main():
     sel_off = {"A": 300, "B": 200, "不确定": 100, "C": 0}
     def sel(r): return round(sel_off.get(r["vtier"], 0) + max(vs(r), 0), 1)  # 选股分＝估值层基数(A300/B200/不确定100/C0)+估值分
     def hard(r):
-        return (["红线"] if r["red"] else []) + (["未过质量初筛"] if not r["screen"] else []) + (["股息削减禁入"] if r["cut_block"] else []) + r["liq_block"] + r["fin_fail"]
+        exb = official_exception_block(r)
+        return (["红线"] if r["red"] else []) + (["未过质量初筛"] if not r["screen"] else []) + (([exb] if exb else [])) + (["股息削减禁入"] if r["cut_block"] else []) + r["liq_block"] + r["fin_fail"]
     def caps_ok(lst):
         ci = {}
         for r in lst: ci[r["ind"]] = ci.get(r["ind"], 0) + 1
@@ -563,7 +604,7 @@ def main():
                        "kline_primary": "tencent web.ifzq.gtimg.cn qfqday", "kline_backup": "eastmoney push2his daily amount",
                        "quote_fallback": q_fb, "kline_fallback": k_fb, "ashare_day_source": ashare_src},
            "fin_updated_at": fin["updated_at"],
-           "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "portfolio", "tie_break_max", "dividend_cut", "liquidity_gate", "fin_track", "growth", "hk_val_history", "type_override", "rebalance")}, "screen_stats": cand["stats"], "screen_updated_at": cand["updated_at"],
+           "cn10y": bond, "fx": fx, "config": {k2: cfg[k2] for k2 in ("weights", "tiers", "valuation_tier", "screen", "metrics", "portfolio", "tie_break_max", "dividend_cut", "liquidity_gate", "fin_track", "growth", "hk_val_history", "type_override", "rebalance", "manual_pool")}, "screen_stats": cand["stats"], "screen_updated_at": cand["updated_at"],
            "dims": DIMS, "pool_candidates": len(pool), "bank_dropped": dropped, "ah_dropped": ah_dropped if select else load("data/latest.json", {}).get("ah_dropped", []), "fin_dropped": fin_dropped if select else load("data/latest.json", {}).get("fin_dropped", []), "fin_failed": fin.get("failed", []),
            "missing_kline": [p["code"] for p in pool if not K.get(p["code"])], "missing_quotes": [p["code"] for p in pool if sym(p) not in Q],
            "portfolio": {"name": pc["name"], "items": port, "candidate_items": cand_port, "official": {k_: OF.get(k_) for k_ in ("rebalance_date", "next_rebalance", "freq", "buffer", "changes", "prev_rebalance_date")}, "industry": inds, "industry_skipped": ind_skipped, "blocked": blocked}, "rows": rows}
